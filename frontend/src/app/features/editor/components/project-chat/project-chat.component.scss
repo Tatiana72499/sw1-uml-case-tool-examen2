@@ -59,3 +59,9 @@ h2 { margin: 4px 0 0; color: #24304f; font-size: 1.2rem; }
 .chat-memory-empty { padding: 8px 0; color: var(--color-text-muted); font-size: 12px; }
 .chat-memory-toggle { border: 0; border-radius: 8px; padding: 7px 9px; background: transparent; color: var(--color-primary); cursor: pointer; font: inherit; font-size: 11px; }
 .chat-memory-back { margin-top: 10px; border: 0; background: transparent; color: var(--color-primary); cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; }
+
+.chat-camera-button { display:inline-flex; align-items:center; gap:6px; margin-top:8px; padding:6px 9px; border:1px solid #d9cfea; border-radius:9px; color:#68469c; background:#f8f5fc; font-size:.78rem; cursor:pointer; }
+.chat-camera-button input { position:absolute; width:1px; height:1px; opacity:0; }
+.chat-camera-button:focus-within { outline:2px solid #8061b2; outline-offset:2px; }
+.chat-camera-button.disabled { opacity:.6; pointer-events:none; }
+.chat-speak-button { margin-top:6px; border:0; color:#68469c; background:transparent; cursor:pointer; font-size:.75rem; }

@@ -39,3 +39,8 @@ single new diagram version. A version conflict returns HTTP 409.
 
 The n8n workflow is intentionally inactive in the repository export and must
 be activated/configured manually after importing it into n8n.
+
+Configure the Webhook to respond through the final `Respond to Webhook` node.
+Set **Respond With: JSON** and **Response Body: `={{ $json }}`**. The update
+workflow reuses the same Gemini credential as the image-import workflow; import
+and activate `SW1 UML Image Update` so its production webhook is registered.

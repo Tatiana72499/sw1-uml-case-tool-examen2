@@ -8,7 +8,7 @@ export type CollaborationStatus = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 
 export interface OnlineUser { userId: string; firstName: string; lastName: string; role: 'OWNER' | 'EDITOR' | 'VIEWER'; }
 export interface RemoteCursor { user: OnlineUser; x: number; y: number; updatedAt: number; }
 export interface RemoteSelection { user: OnlineUser; elementType: 'CLASS' | 'RELATION' | null; elementId: string | null; }
-export interface CollaborationEvent { type: string; diagramId?: string; projectId?: string; conversationId?: string; clientMessageId?: string; contextScope?: AiContextScope; diagramVersion?: number; operationId?: string; reason?: string; serverVersion?: number; version?: number; users?: OnlineUser[]; result?: OperationExecutionResponse; message?: AiMessage; memory?: AiMemory; memoryId?: string; errorMessage?: string; canonicalModel?: OperationExecutionResponse['canonicalModel']; viewState?: OperationExecutionResponse['viewState']; actor?: { userId: string }; user?: OnlineUser; x?: number; y?: number; elementType?: 'CLASS' | 'RELATION' | null; elementId?: string | null; }
+export interface CollaborationEvent { type: string; diagramId?: string; projectId?: string; conversationId?: string; clientMessageId?: string; contextScope?: AiContextScope; diagramVersion?: number; operationId?: string; reason?: string; serverVersion?: number; version?: number; users?: OnlineUser[]; result?: OperationExecutionResponse; message?: AiMessage; memory?: AiMemory; memoryId?: string; errorMessage?: string; canonicalModel?: OperationExecutionResponse['canonicalModel']; viewState?: OperationExecutionResponse['viewState']; actor?: { userId: string }; user?: OnlineUser; x?: number; y?: number; classId?: string; moveId?: string; elementType?: 'CLASS' | 'RELATION' | null; elementId?: string | null; }
 
 @Injectable({ providedIn: 'root' })
 export class CollaborationService {
@@ -26,11 +26,15 @@ export class CollaborationService {
   private knownVersion = 0;
   private needsResync = false;
   private resyncing = false;
-  private pending = new Map<string, { resolve: (response: OperationExecutionResponse) => void; reject: (error: unknown) => void }>();
+  private pending = new Map<string, { resolve: (response: OperationExecutionResponse) => void; reject: (error: unknown) => void; timer: ReturnType<typeof setTimeout> }>();
   private projectSubscriptions = new Map<string, string>();
+  private pendingClassPositions = new Map<string, { diagramId: string; classId: string; x: number; y: number; moveId: string }>();
 
   connect(diagramId: string, knownVersion: number): void {
-    if (this.diagramId && this.diagramId !== diagramId) this.projectSubscriptions.clear();
+    if (this.diagramId && this.diagramId !== diagramId) {
+      this.projectSubscriptions.clear();
+      this.pendingClassPositions.clear();
+    }
     this.diagramId = diagramId;
     this.knownVersion = knownVersion;
     this.joined.set(false);
@@ -76,7 +80,7 @@ export class CollaborationService {
 
   hasActiveDiagram(): boolean { return !!this.diagramId && typeof WebSocket !== 'undefined' && !!localStorage.getItem('sw1.auth.token'); }
   isConnected(): boolean { return this.status() === 'CONNECTED' && this.joined() && this.socket?.readyState === WebSocket.OPEN; }
-  markResynced(version: number): void { this.knownVersion = version; this.needsResync = false; this.resyncing = false; this.joined.set(true); this.flushPending(); this.flushProjectSubscriptions(); }
+  markResynced(version: number): void { this.knownVersion = version; this.needsResync = false; this.resyncing = false; this.joined.set(true); this.flushPending(); this.flushClassPositions(); this.flushProjectSubscriptions(); }
   markApplied(version: number): void { this.knownVersion = version; }
 
   sendCursorPosition(x: number, y: number): void {
@@ -86,6 +90,24 @@ export class CollaborationService {
     this.nextCursorAt = now + 40;
     this.send({ type: 'CURSOR_MOVE', diagramId: this.diagramId, x, y });
   }
+  sendClassPositionPreview(classId: string, x: number, y: number): void {
+    if (!this.isConnected() || !Number.isFinite(x) || !Number.isFinite(y)) return;
+    const now = performance.now();
+    if (now < this.nextPositionPreviewAt) return;
+    this.nextPositionPreviewAt = now + 40;
+    this.send({ type: 'CLASS_POSITION_PREVIEW', diagramId: this.diagramId, classId, x, y });
+  }
+
+  commitClassPosition(classId: string, x: number, y: number): string | null {
+    if (!this.hasActiveDiagram() || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const moveId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID() : String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+    const position = { diagramId: this.diagramId, classId, x, y, moveId };
+    this.pendingClassPositions.set(classId, position);
+    if (this.isConnected()) this.send({ type: 'CLASS_POSITION_COMMIT', ...position });
+    return moveId;
+  }
+
   sendSelection(elementType: 'CLASS' | 'RELATION' | null, elementId: string | null): void {
     if (this.isConnected()) this.send({ type: 'SELECTION_CHANGE', diagramId: this.diagramId, elementType, elementId });
   }
@@ -113,10 +135,21 @@ export class CollaborationService {
     return new Observable((subscriber) => {
       if (!this.hasActiveDiagram()) { subscriber.error(new Error('WebSocket is not configured')); return; }
       const operation = request.operation;
-      this.pending.set(operation.operationId, { resolve: (response) => { this.pendingOperations.delete(operation.operationId); subscriber.next(response); subscriber.complete(); }, reject: (error) => { this.pendingOperations.delete(operation.operationId); subscriber.error(error); } });
+      const timer = setTimeout(() => {
+        const pending = this.pending.get(operation.operationId);
+        if (!pending) return;
+        this.pending.delete(operation.operationId);
+        this.pendingOperations.delete(operation.operationId);
+        this.needsResync = true;
+        this.resyncing = true;
+        this.joined.set(false);
+        pending.reject({ reason: 'OPERATION_TIMEOUT', message: 'El servidor no confirmó la operación en 15 segundos.' });
+        this.events.next({ type: 'RESYNC_REQUIRED' });
+      }, 15_000);
+      this.pending.set(operation.operationId, { timer, resolve: (response) => { clearTimeout(timer); this.pendingOperations.delete(operation.operationId); subscriber.next(response); subscriber.complete(); }, reject: (error) => { clearTimeout(timer); this.pendingOperations.delete(operation.operationId); subscriber.error(error); } });
       this.pendingOperations.set(operation.operationId, operation);
       if (this.isConnected() && !this.resyncing) this.sendOperationFrame(operation);
-      return () => { this.pending.delete(operation.operationId); this.pendingOperations.delete(operation.operationId); };
+      return () => { clearTimeout(timer); this.pending.delete(operation.operationId); this.pendingOperations.delete(operation.operationId); };
     });
   }
 
@@ -124,7 +157,10 @@ export class CollaborationService {
     console.debug('[WS RECEIVE]', message.type, message.operationId ?? '', message.version ?? '');
     if (message.type === 'JOINED') {
       this.joined.set(!this.needsResync);
-      if (!this.needsResync) this.flushPending();
+      if (!this.needsResync) {
+        this.flushPending();
+        this.flushClassPositions();
+      }
       this.flushProjectSubscriptions();
       this.events.next(message);
       return;
@@ -158,6 +194,11 @@ export class CollaborationService {
         this.remoteSelections.update((selections) => ({ ...selections, [message.user!.userId]: { user: message.user!, elementType: message.elementType ?? null, elementId: message.elementId ?? null } }));
       }
     }
+    if ((message.type === 'CLASS_POSITION_SAVED' || message.type === 'CLASS_POSITION_REJECTED')
+      && message.classId && message.moveId) {
+      const pending = this.pendingClassPositions.get(message.classId);
+      if (pending?.moveId === message.moveId) this.pendingClassPositions.delete(message.classId);
+    }
     if (message.type === 'OPERATION_REJECTED' && message.operationId) {
       const pending = this.pending.get(message.operationId);
       if (pending) { this.pending.delete(message.operationId); pending.reject(message); }
@@ -185,12 +226,19 @@ export class CollaborationService {
       if (operation) this.sendOperationFrame(operation);
     }
   }
+  private flushClassPositions(): void {
+    if (!this.isConnected()) return;
+    for (const position of this.pendingClassPositions.values()) {
+      this.send({ type: 'CLASS_POSITION_COMMIT', ...position });
+    }
+  }
   private flushProjectSubscriptions(): void {
     if (!this.isConnected()) return;
     for (const [projectId, conversationId] of this.projectSubscriptions) this.send({ type: 'CHAT_PROJECT_SUBSCRIBE', projectId, conversationId });
   }
   private pendingOperations = new Map<string, ExecuteDiagramOperationRequest['operation']>();
   private nextCursorAt = 0;
+  private nextPositionPreviewAt = 0;
   private readonly cursorExpiryTimer = setInterval(() => {
     const cutoff = Date.now() - 15000;
     this.remoteCursors.update((cursors) => Object.fromEntries(Object.entries(cursors).filter(([, cursor]) => cursor.updatedAt >= cutoff)));

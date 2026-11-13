@@ -58,13 +58,17 @@ public class ImageUmlAiService {
                     .headers(headers -> { if (!webhookToken.isBlank()) headers.setBearerAuth(webhookToken); })
                     .body(new ImageRequest(safeFileName(fileName), contentType, encodedImage))
                     .retrieve().body(AiUmlDetectionResponse.class);
-            if (response == null) throw new IllegalArgumentException("El servicio visual devolvió una respuesta vacía.");
+            if (response == null) throw new IllegalStateException(
+                    "n8n respondió HTTP 200 sin JSON. Revisa la ejecución del workflow: puede haber fallado Gemini antes del nodo de respuesta; verifica también Respond to Webhook → JSON con {{ $json }}.");
             log.info("N8N image request completed in {} ms status={} success={}", elapsedMs(startedAt), 200, response.success());
             return response;
         } catch (RestClientResponseException exception) {
             log.error("N8N image request failed after {} ms status={} body={} exception={} message={} rootCause={} rootMessage={}",
                     elapsedMs(startedAt), exception.getStatusCode().value(), summarize(exception.getResponseBodyAsString()),
                     exception.getClass().getName(), exception.getMessage(), rootCauseClass(exception), rootCauseMessage(exception));
+            if (exception.getStatusCode().value() == 404) {
+                throw new IllegalStateException("El webhook de interpretación visual no está registrado en n8n. Activa el workflow de importación UML y verifica que use la ruta configurada.", exception);
+            }
             throw new IllegalStateException("El servicio de interpretación visual no está disponible.", exception);
         } catch (RestClientException exception) {
             log.error("N8N image request failed after {} ms status=unknown exception={} message={} rootCause={} rootMessage={}",

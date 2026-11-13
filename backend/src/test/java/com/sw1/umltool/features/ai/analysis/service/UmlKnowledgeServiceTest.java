@@ -70,13 +70,14 @@ class UmlKnowledgeServiceTest {
     }
 
     @Test
-    void conversationalGuidanceKeepsSuggestionsEvidenceBasedAndBrief() {
+    void conversationalGuidanceAllowsMultipleEvidenceBasedSuggestions() {
         String guidance = service.conversationalGuidance();
 
-        assertTrue(guidance.contains("maximo 3"));
+        assertTrue(guidance.contains("varias sugerencias distintas"));
+        assertTrue(guidance.contains("no inventes problemas para llenar una lista"));
         assertTrue(guidance.contains("No propongas metodos solo porque no existan"));
         assertTrue(guidance.contains("multiplicidades que ya sean validas"));
         assertTrue(guidance.contains("pertenencia o ciclo de vida"));
-        assertTrue(guidance.contains("lenguaje condicional"));
+        assertTrue(guidance.contains("formula preguntas concretas sobre el contexto"));
     }
 }

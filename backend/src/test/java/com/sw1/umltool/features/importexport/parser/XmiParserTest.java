@@ -1,9 +1,13 @@
 package com.sw1.umltool.features.importexport.parser;
 
 import com.sw1.umltool.features.diagram.model.canonical.enums.RelationType;
+import com.sw1.umltool.features.diagram.validation.CanonicalModelValidator;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
@@ -78,9 +82,23 @@ class XmiParserTest {
         assertEquals("0", diagram.getRelations().getFirst().getTargetMultiplicity().getLower());
         assertEquals("*", diagram.getRelations().getFirst().getTargetMultiplicity().getUpper());
         assertEquals(1, diagram.getAssociationClassLinks().size());
+        assertTrue(new CanonicalModelValidator().validate(diagram).isValid());
         assertTrue(diagram.getClasses().stream().anyMatch(c -> c.getName().equals("Empleado") && c.getAttributes().isEmpty()));
     }
 
+    @Test
+    void importsTheProvidedEnterpriseArchitectXmi11FileWhenRequested() throws Exception {
+        String samplePath = System.getProperty("xmi.sample.path");
+        Assumptions.assumeTrue(samplePath != null && !samplePath.isBlank(), "Set xmi.sample.path to run the external EA sample");
+        var result = parser.parse(Files.readAllBytes(Path.of(samplePath)), "ea-file", "EA export");
+        var diagram = result.getCanonicalModel();
+        assertEquals(7, diagram.getClasses().size(), "EA's synthetic EARootClass must not be imported as a user class");
+        assertTrue(result.getStatistics().getAttributes() > 0, "Nested UML 1.1 class features should be imported");
+        assertEquals(6, diagram.getRelations().size());
+        assertEquals(1, diagram.getAssociationClassLinks().size());
+        assertTrue(new CanonicalModelValidator().validate(diagram).isValid());
+        assertTrue(result.getWarnings().stream().noneMatch(warning -> warning.contains("dos extremos") || warning.contains("referencia no resuelta")), result.getWarnings().toString());
+    }
     @Test
     void rejectsInvalidXmlAndDoctype() {
         assertThrows(IllegalArgumentException.class, () -> parser.parse(read("invalid.xmi"), "d", "D"));

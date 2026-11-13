@@ -3,6 +3,7 @@ package com.sw1.umltool.features.diagram.service;
 import com.sw1.umltool.features.diagram.model.canonical.UmlDiagram;
 import com.sw1.umltool.features.diagram.model.persistence.DiagramEntity;
 import com.sw1.umltool.features.diagram.model.view.DiagramViewState;
+import com.sw1.umltool.features.diagram.model.view.NodeViewState;
 import com.sw1.umltool.features.diagram.operation.DiagramOperation;
 import com.sw1.umltool.features.diagram.service.DiagramOperationService;
 import com.sw1.umltool.features.diagram.operation.OperationApplicationException;
@@ -37,6 +38,34 @@ public class PersistentDiagramOperationService {
     public PersistentDiagramOperationService(DiagramRepository repository, DiagramStateSerializer serializer, DiagramOperationService operationService, com.sw1.umltool.features.project.service.ProjectAccessService access) { this(repository, serializer, operationService, access, null); }
     @org.springframework.beans.factory.annotation.Autowired
     public PersistentDiagramOperationService(DiagramRepository repository, DiagramStateSerializer serializer, DiagramOperationService operationService, com.sw1.umltool.features.project.service.ProjectAccessService access, com.sw1.umltool.features.diagram.history.service.DiagramHistoryService history) { this.diagramRepository=repository; this.diagramStateSerializer=serializer; this.diagramOperationService=operationService; this.access=access; this.history=history; }
+
+    @Transactional
+    public void saveClassPosition(String diagramId, String classId, double x, double y, String userId) {
+        if (isBlank(diagramId) || isBlank(classId)) throw new OperationApplicationException("Diagram and class are required");
+        if (!Double.isFinite(x) || !Double.isFinite(y) || Math.abs(x) > 1_000_000 || Math.abs(y) > 1_000_000) {
+            throw new OperationApplicationException("Canvas position is outside the allowed range");
+        }
+        DiagramEntity entity = diagramRepository.findByIdForUpdate(diagramId)
+                .orElseThrow(() -> new DiagramNotFoundException("Diagram not found: " + diagramId));
+        if (userId != null && access != null) access.requireDiagramEditor(diagramId, userId);
+
+        UmlDiagram canonical = diagramStateSerializer.deserializeCanonical(entity.getCanonicalModelJson());
+        boolean classExists = canonical.getClasses().stream().anyMatch(umlClass -> classId.equals(umlClass.getId()));
+        if (!classExists) throw new OperationApplicationException("Class not found: " + classId);
+
+        DiagramViewState viewState = diagramStateSerializer.deserializeViewState(entity.getViewStateJson());
+        NodeViewState node = viewState.getNodes().stream()
+                .filter(candidate -> classId.equals(candidate.getClassId()))
+                .findFirst().orElse(null);
+        if (node == null) {
+            node = NodeViewState.builder().classId(classId).width(235).height(160).build();
+            viewState.getNodes().add(node);
+        }
+        node.setX(x);
+        node.setY(y);
+        entity.setViewStateJson(diagramStateSerializer.serializeViewState(viewState));
+        diagramRepository.save(entity);
+    }
 
     @Transactional
     public OperationExecutionResult execute(String diagramId, DiagramOperation operation) {

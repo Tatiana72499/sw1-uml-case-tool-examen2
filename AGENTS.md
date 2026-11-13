@@ -45,7 +45,7 @@ Debe producir operaciones semánticas que se aplican al modelo canónico.
 La colaboración debe permitir edición concurrente real.
 No sincronizar reemplazando el JSON completo del diagrama en cada cambio.
 
-Toda operación colaborativa debe contemplar:
+Toda operación semántica versionada debe contemplar:
 - operationId
 - diagramId
 - userId
@@ -53,7 +53,12 @@ Toda operación colaborativa debe contemplar:
 - tipo de operación
 - payload
 
-El servidor es la autoridad final del estado colaborativo.
+Política de verificación solicitada por el equipo:
+- Para cada funcionalidad modificada, preparar una matriz de al menos 100 casos de prueba significativos que cubra éxito, errores, límites, permisos, concurrencia y recuperación; usar pruebas parametrizadas cuando sea apropiado.
+- Ejecutar y reportar el resultado real de cada caso. No simular ni afirmar que se ejecutaron 100 pruebas si no se hizo.
+- Si el costo o la infraestructura impide completar los 100 casos en una iteración, ejecutar el subconjunto enfocado disponible, registrar el faltante y no marcar la funcionalidad como verificada.
+
+El movimiento del canvas se sincroniza por WebSocket como vista previa y se persiste al soltar en viewState, sin incrementar versión ni registrar historial. El servidor es la autoridad final del estado colaborativo.
 
 Nunca guardar claves API, contraseñas reales o secretos en Git.
 
@@ -67,3 +72,15 @@ Después de implementar:
 2. Ejecutar pruebas.
 3. Reportar archivos modificados.
 4. Reportar errores pendientes.
+5. Informar cuántos casos se ejecutaron respecto de los 100 requeridos por funcionalidad y cuáles quedaron pendientes.
+Interacción y usabilidad del editor:
+- La tarjeta UML debe permitir crear y modificar nombre, abstracción, apariencia, atributos, métodos y parámetros sin obligar al usuario a usar el inspector.
+- El inspector puede mantenerse como alternativa, pero no debe ser el único camino para ninguna propiedad editable de una clase.
+- Todos los cambios siguen las operaciones semánticas existentes sobre el modelo canónico y la colaboración versionada.
+- Controles dentro de la tarjeta deben detener eventos de arrastre, tener etiquetas accesibles, permitir cancelar borradores y mostrar errores junto al elemento.
+- Mantener actualizados los criterios de aceptación en docs/criterios-calidad-segundo-parcial.md cuando cambie el alcance de segundo parcial.
+
+Integridad del modelo UML:
+- No aceptar más de un atributo marcado como clave primaria por clase; validar tanto en la interfaz como en CanonicalModelValidator.
+- En generación Spring, las asociaciones muchos a muchos elegibles producen una entidad puente con referencias únicas como pareja. Las clases de asociación explícitas reemplazan esa entidad generada.
+- No generar entidades puente para composiciones muchos a muchos.

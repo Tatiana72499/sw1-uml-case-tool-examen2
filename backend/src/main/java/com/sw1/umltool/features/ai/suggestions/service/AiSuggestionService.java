@@ -21,7 +21,7 @@ import java.util.concurrent.TimeoutException;
 
 @Service
 public class AiSuggestionService {
-    private static final int MAX_SUGGESTIONS = 3;
+    private static final int MAX_SUGGESTIONS = 10;
     private static final int MAX_FIELD_LENGTH = 700;
     private final AiSuggestionSemanticValidator semanticValidator = new AiSuggestionSemanticValidator();
     private final AiAnalysisContextService context;
@@ -82,11 +82,12 @@ public class AiSuggestionService {
         Set<String> keys = new HashSet<>();
         for (int index = 0; index < Math.min(values.size(), MAX_SUGGESTIONS); index++) {
             JsonNode value = values.get(index);
-            String category = required(value, "category");
+            String category = required(value, "category").toUpperCase(java.util.Locale.ROOT);
             String elementId = nullable(value, "elementId");
-            if (elementId != null && !prepared.descriptors().containsKey(elementId)) {
-                throw new AiAnalysisException("Una sugerencia referencia un elemento UML inexistente.");
-            }
+            // A small local model can hallucinate an id even when its text is useful.
+            // Discard only that unsafe item; one bad reference must not erase every
+            // other valid suggestion in the response.
+            if (elementId != null && !prepared.descriptors().containsKey(elementId)) continue;
             String title = required(value, "title");
             String reason = required(value, "reason");
             String proposal = required(value, "proposal");
@@ -101,8 +102,10 @@ public class AiSuggestionService {
                         elementId, title, reason, proposal, requiresBusinessContext));
             }
         }
-        String summary = result.isEmpty() ? "No se encontraron sugerencias para revisar." :
-                "Se generaron " + result.size() + (result.size() == 1 ? " sugerencia opcional." : " sugerencias opcionales.");
+        String modelSummary = nullable(node, "summary");
+        String summary = result.isEmpty() ? "No se encontraron sugerencias válidas para revisar; las referencias dudosas se descartaron." :
+                (modelSummary == null ? "" : modelSummary + " ") + "Se generaron " + result.size()
+                        + (result.size() == 1 ? " sugerencia para revisar." : " sugerencias para revisar.");
         return new AiSuggestionsResponse(projectId, diagramId, summary, List.copyOf(result));
     }
 
@@ -118,12 +121,14 @@ public class AiSuggestionService {
     }
 
     private String systemPrompt() {
-        return "Eres SW1 IA, un asistente especializado en sugerencias UML opcionales. " +
-                "Usa únicamente el modelo canónico y memorias PROJECT del contexto. " +
-                "No modifiques el diagrama, no inventes clases existentes ni presentes reglas de negocio como hechos. " +
-                "Prioriza como maximo 3 sugerencias utiles y condicionales; no propongas metodos solo porque no existan, no cambies multiplicidades validas ni sugieras agregacion/composicion sin evidencia de pertenencia o ciclo de vida. " +
-                "No generes sugerencias para completar una cantidad. Si falta contexto del negocio, dilo explícitamente. " +
-                "En el primer alcance solo acepta ideas opcionales de atributos o preguntas generales; no propongas operaciones, relaciones, multiplicidades, agregación ni composición. " +
-                "Devuelve únicamente JSON con: {\"suggestions\":[{\"category\":\"ATTRIBUTE|GENERAL\",\"elementId\":\"id existente o null\",\"title\":\"...\",\"reason\":\"...\",\"proposal\":\"...\",\"requiresBusinessContext\":true}]}";
+        return "Eres SW1 IA, desarrollador sénior y mentor especializado en UML 2.5, análisis de diseño y revisión de modelos. " +
+                "Revisa el diagrama completo del contexto: clases, atributos, operaciones, relaciones, multiplicidades, herencia, consistencia y convenciones de nombres. " +
+                "Usa únicamente evidencia del modelo canónico y memorias PROJECT. No modifiques el diagrama ni inventes elementos existentes, requisitos o reglas del negocio. " +
+                "Entrega hasta 10 sugerencias concretas y diversas, priorizadas por impacto. Puedes señalar errores estructurales demostrables, inconsistencias UML, oportunidades de diseño y preguntas de mentoría; no llenes el límite con observaciones subjetivas. " +
+                "No propongas métodos solo porque no existan, no cambies multiplicidades válidas ni recomiendes agregación/composición sin evidencia de pertenencia o ciclo de vida. " +
+                "Cuando una conclusión dependa del dominio, marca requiresBusinessContext=true y formula qué contexto falta en la propuesta. " +
+                "Cada elementId debe copiarse literalmente de un id presente en el modelo canónico; si el consejo es general, usa null. No inventes ni reconstruyas IDs. " +
+                "Usa category ATTRIBUTE, OPERATION, RELATIONSHIP, MULTIPLICITY, INHERITANCE, NAMING, CONSISTENCY o GENERAL. " +
+                "Devuelve únicamente JSON con: {\"summary\":\"resumen breve\",\"suggestions\":[{\"category\":\"ATTRIBUTE|OPERATION|RELATIONSHIP|MULTIPLICITY|INHERITANCE|NAMING|CONSISTENCY|GENERAL\",\"elementId\":\"id existente o null\",\"title\":\"...\",\"reason\":\"evidencia observada\",\"proposal\":\"acción sugerida o pregunta concreta\",\"requiresBusinessContext\":true}]}";
     }
 }

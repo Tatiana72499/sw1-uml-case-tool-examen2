@@ -7,12 +7,32 @@ import com.sw1.umltool.features.ai.analysis.service.AiAnalysisContextService;
  * diagram operations and must never be treated as an executable mutation.
  */
 public final class AiSuggestionSemanticValidator {
+    private static final java.util.Set<String> CATEGORIES = java.util.Set.of(
+            "ATTRIBUTE", "OPERATION", "RELATIONSHIP", "MULTIPLICITY", "INHERITANCE",
+            "NAMING", "CONSISTENCY", "GENERAL");
+
     public boolean accepts(String category, String elementId, boolean requiresBusinessContext,
                            AiAnalysisContextService.ElementDescriptor descriptor) {
-        if ("GENERAL".equals(category)) return true;
-        if (!"ATTRIBUTE".equals(category) || elementId == null || descriptor == null) return false;
-        if (!requiresBusinessContext) return false;
-        return descriptor.kind() == AiAnalysisContextService.ElementKind.CLASS
-                || descriptor.kind() == AiAnalysisContextService.ElementKind.ATTRIBUTE;
+        if (category == null || !CATEGORIES.contains(category)) return false;
+        if ("GENERAL".equals(category)) return elementId == null;
+        if (descriptor == null || elementId == null) return false;
+
+        return switch (category) {
+            case "ATTRIBUTE" -> requiresBusinessContext
+                    && (descriptor.kind() == AiAnalysisContextService.ElementKind.CLASS
+                    || descriptor.kind() == AiAnalysisContextService.ElementKind.ATTRIBUTE);
+            case "NAMING" -> requiresBusinessContext
+                    && (descriptor.kind() == AiAnalysisContextService.ElementKind.CLASS
+                    || descriptor.kind() == AiAnalysisContextService.ElementKind.ATTRIBUTE
+                    || descriptor.kind() == AiAnalysisContextService.ElementKind.METHOD);
+            case "OPERATION" -> requiresBusinessContext
+                    && (descriptor.kind() == AiAnalysisContextService.ElementKind.METHOD
+                    || (descriptor.kind() == AiAnalysisContextService.ElementKind.CLASS && descriptor.classHasMethods()));
+            case "RELATIONSHIP", "MULTIPLICITY", "INHERITANCE" -> requiresBusinessContext
+                    && (descriptor.kind() == AiAnalysisContextService.ElementKind.CLASS
+                    || descriptor.kind() == AiAnalysisContextService.ElementKind.RELATION);
+            case "CONSISTENCY" -> true;
+            default -> false;
+        };
     }
 }

@@ -2,6 +2,11 @@
 
 La aplicación envía la imagen desde Spring Boot a un workflow n8n independiente. Angular nunca recibe el token ni llama directamente a Gemini.
 
+Configura el Webhook para responder mediante el nodo `Respond to Webhook`. En
+el nodo final selecciona **Respond With: JSON** y **Response Body: `={{ $json }}`.
+Si la respuesta queda vacía, la aplicación no puede construir el preview aunque
+n8n haya respondido con HTTP 200.
+
 ## Configuración
 
 ```env

@@ -1,5 +1,5 @@
 import { DatePipe } from '@angular/common';
-import { AfterViewInit, Component, ElementRef, OnDestroy, OnInit, ViewChild, computed, input, output, signal } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, OnDestroy, OnInit, ViewChild, computed, inject, input, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
 import { AiContextScope, AiConversation, AiMemory, AiMemoryScope, AiMemoryType, AiMessage } from '../../models/ai-chat.model';
@@ -8,6 +8,7 @@ import { CollaborationEvent, CollaborationService } from '../../services/collabo
 import { VoiceRecognitionService } from '../../services/voice-recognition.service';
 import { Subscription, finalize, timeout } from 'rxjs';
 import { AuthService } from '../../../auth/services/auth.service';
+import { ImageImportService } from '../../services/image-import.service';
 
 @Component({
   selector: 'app-project-chat',
@@ -31,6 +32,9 @@ export class ProjectChatComponent implements AfterViewInit, OnInit, OnDestroy {
   readonly aiGenerating = signal(false);
   readonly voiceListening = signal(false);
   readonly voiceError = signal('');
+  readonly imageImporting = signal(false);
+  readonly imageError = signal('');
+  private readonly imageImport = inject(ImageImportService);
   readonly contextScope = signal<AiContextScope>('DIAGRAM');
   readonly memoryScope = signal<AiMemoryScope>('PROJECT');
   readonly memoryOpen = signal(false);
@@ -52,6 +56,9 @@ export class ProjectChatComponent implements AfterViewInit, OnInit, OnDestroy {
   private scrollFrame: number | null = null;
   private voiceSubscription: Subscription | null = null;
   private lastVoiceTranscript = '';
+  private readonly speakingMessageIds = new Set<string>();
+  private voiceDraftRecognized = false;
+  private voiceResponseRequested = false;
 
   constructor(private readonly chat: AiChatService, private readonly collaboration: CollaborationService, private readonly auth: AuthService, private readonly voiceRecognition: VoiceRecognitionService) {
     this.eventsSubscription = this.collaboration.events.subscribe(event => this.handleCollaborationEvent(event));
@@ -75,6 +82,7 @@ export class ProjectChatComponent implements AfterViewInit, OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.eventsSubscription.unsubscribe();
     this.stopVoiceRecognition();
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
     this.collaboration.unsubscribeProject(this.projectId());
     if (this.aiGenerationTimer) clearTimeout(this.aiGenerationTimer);
     if (this.scrollFrame !== null) cancelAnimationFrame(this.scrollFrame);
@@ -152,10 +160,14 @@ export class ProjectChatComponent implements AfterViewInit, OnInit, OnDestroy {
   }
 
   send(): void {
-    const content = this.draft.trim();
+    const typedContent = this.draft.trim();
+    const fromVoice = this.voiceDraftRecognized;
+    const content = fromVoice && !this.privateChat() && !/(^|\s)@ia\b/i.test(typedContent)
+      ? '@ia ' + typedContent : typedContent;
     const conversation = this.conversation();
     if (!content || !conversation || this.sending()) return;
     this.sending.set(true);
+    this.voiceResponseRequested = fromVoice;
     this.aiGenerating.set(this.privateChat() || /(^|\s)@ia\b/i.test(content));
     if (this.aiGenerating()) this.startAiGenerationTimeout();
     this.error.set('');
@@ -167,7 +179,7 @@ export class ProjectChatComponent implements AfterViewInit, OnInit, OnDestroy {
       timeout({ each: 15000 }),
       finalize(() => this.sending.set(false)),
     ).subscribe({
-      next: message => { this.messages.update(current => current.some(item => item.id === message.id) ? current : [...current, message]); this.draft = ''; this.pendingClientMessageId = null; this.pendingClientMessageContent = null; this.sending.set(false); this.scheduleScrollToBottom(); },
+      next: message => { this.messages.update(current => current.some(item => item.id === message.id) ? current : [...current, message]); this.draft = ''; this.voiceDraftRecognized = false; this.pendingClientMessageId = null; this.pendingClientMessageContent = null; this.sending.set(false); this.scheduleScrollToBottom(); },
       error: error => { this.error.set(error?.name === 'TimeoutError' ? 'El envío tardó demasiado. Comprueba la conexión y vuelve a intentarlo.' : error?.error?.message ?? 'No se pudo enviar el mensaje.'); this.aiGenerating.set(false); },
     });
   }
@@ -247,10 +259,49 @@ export class ProjectChatComponent implements AfterViewInit, OnInit, OnDestroy {
 
   closePanel(): void {
     this.stopVoiceRecognition();
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
     this.collaboration.unsubscribeProject(this.projectId());
     this.close.emit();
   }
 
+  importDiagramImage(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.item(0);
+    input.value = '';
+    if (!file) return;
+    const diagramId = this.diagramId();
+    const version = this.diagramVersion();
+    if (!diagramId || version === null || version === undefined) {
+      this.imageError.set('Abre un diagrama para importar una imagen.');
+      return;
+    }
+    if (!confirm('La IA convertirá esta imagen UML y aplicará el resultado al diagrama abierto. Los colaboradores conectados verán el cambio. ¿Continuar?')) return;
+    this.imageError.set('');
+    this.imageImporting.set(true);
+    this.imageImport.apply(diagramId, version, file).subscribe({
+      next: () => { this.imageImporting.set(false); this.imageError.set('Diagrama actualizado desde la imagen.'); },
+      error: error => { this.imageImporting.set(false); this.imageError.set(error?.error?.message ?? 'No se pudo importar la imagen al diagrama.'); },
+    });
+  }
+
+  toggleSpeech(message: AiMessage): void {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      this.voiceError.set('La lectura en voz alta no está disponible en este navegador.');
+      return;
+    }
+    if (this.speakingMessageIds.has(message.id)) {
+      window.speechSynthesis.cancel();
+      this.speakingMessageIds.clear();
+      return;
+    }
+    window.speechSynthesis.cancel();
+    this.speakingMessageIds.clear();
+    const utterance = new SpeechSynthesisUtterance(message.content);
+    utterance.lang = 'es-ES';
+    utterance.onstart = () => this.speakingMessageIds.add(message.id);
+    utterance.onend = utterance.onerror = () => this.speakingMessageIds.delete(message.id);
+    window.speechSynthesis.speak(utterance);
+  }
   toggleVoiceRecognition(): void {
     if (this.voiceListening()) {
       this.stopVoiceRecognition();
@@ -270,6 +321,7 @@ export class ProjectChatComponent implements AfterViewInit, OnInit, OnDestroy {
           const transcript = event.text.trim();
           if (transcript === this.lastVoiceTranscript) return;
           this.lastVoiceTranscript = transcript;
+          this.voiceDraftRecognized = true;
           this.appendVoiceTranscript(transcript);
         }
         if (event.type === 'error') {
@@ -363,6 +415,7 @@ export class ProjectChatComponent implements AfterViewInit, OnInit, OnDestroy {
       this.pendingClientMessageId = null;
       this.sending.set(false);
       this.aiGenerating.set(false);
+      this.voiceResponseRequested = false;
       this.error.set(event.errorMessage ?? 'No se pudo enviar el mensaje.');
       return;
     }
@@ -379,6 +432,10 @@ export class ProjectChatComponent implements AfterViewInit, OnInit, OnDestroy {
     if ((event.type !== 'CHAT_MESSAGE_CREATED' && event.type !== 'CHAT_AI_MESSAGE_CREATED') || event.projectId !== this.projectId() || !event.message) return;
     const conversation = this.conversation();
     if (!conversation || event.conversationId !== conversation.id) return;
+    if (event.type === 'CHAT_AI_MESSAGE_CREATED' && event.message.authorType === 'AI' && this.voiceResponseRequested) {
+      this.voiceResponseRequested = false;
+      this.toggleSpeech(event.message);
+    }
     if (this.messages().some(message => message.id === event.message!.id)) return;
     const shouldStickToBottom = this.isNearBottom();
     this.messages.update(current => [...current, event.message!]);

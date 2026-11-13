@@ -38,6 +38,7 @@ public class DiagramOperationService {
             UmlDiagram currentDiagram,
             DiagramViewState currentViewState) {
         validateBasicArguments(operation, currentDiagram, currentViewState);
+        rejectVersionedCanvasMove(operation);
 
         long previousVersion = currentDiagram.getVersion();
         if (operation.getBaseVersion() != previousVersion) {
@@ -81,6 +82,7 @@ public class DiagramOperationService {
         Set<String> operationIds = new HashSet<>();
         for (DiagramOperation operation : operations) {
             validateBasicArguments(operation, currentDiagram, currentViewState);
+            rejectVersionedCanvasMove(operation);
             if (operation.getBaseVersion() != previousVersion) {
                 throw new VersionConflictException("Version conflict: current version " + previousVersion
                         + ", received version " + operation.getBaseVersion());
@@ -112,6 +114,13 @@ public class DiagramOperationService {
                 .diagram(workingDiagram)
                 .viewState(workingViewState)
                 .build();
+    }
+
+    private void rejectVersionedCanvasMove(DiagramOperation operation) {
+        if (operation.getType() == com.sw1.umltool.features.diagram.operation.DiagramOperationType.MOVE_CLASS) {
+            throw new OperationApplicationException(
+                    "Canvas positions use the collaboration layout channel and do not create diagram versions");
+        }
     }
 
     private void validateBasicArguments(

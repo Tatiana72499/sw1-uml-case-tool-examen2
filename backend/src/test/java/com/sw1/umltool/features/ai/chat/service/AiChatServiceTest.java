@@ -13,6 +13,8 @@ import com.sw1.umltool.features.project.model.ProjectMemberEntity;
 import com.sw1.umltool.features.project.service.ProjectAccessService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
 import java.util.Optional;
@@ -127,6 +129,22 @@ class AiChatServiceTest {
         assertEquals("user-1", request.userId());
         assertEquals("@IA explica la relación", request.content());
         assertEquals(AiConversationType.GROUP, request.conversationType());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "@ia revisa la clase Cliente", "@IA valida el diagrama", "@Ia sugiere mejoras",
+            "@iA prepara una propuesta", "Por favor @ia explica UML", "equipo: @IA revisa las relaciones",
+            "@ia, encuentra errores", "@IA: sugiere atributos", "¿@ia puedes validar esto?",
+            "@ia analiza el contexto completo"
+    })
+    void invokesGroupAssistantForTenMentionForms(String content) {
+        when(conversations.findById("private-1")).thenReturn(Optional.of(conversation("project-1", null, AiConversationType.GROUP)));
+        when(users.findById("user-1")).thenReturn(Optional.of(UserEntity.builder().id("user-1").build()));
+
+        service.saveGroupMessage("project-1", "user-1", "private-1", new SendAiMessageRequest(content));
+
+        verify(orchestrator).request(any());
     }
 
     private AiConversationEntity conversation(String projectId, String ownerId, AiConversationType type) {

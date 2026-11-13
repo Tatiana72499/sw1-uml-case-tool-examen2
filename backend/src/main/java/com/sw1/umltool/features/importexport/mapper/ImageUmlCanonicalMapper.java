@@ -20,6 +20,7 @@ public class ImageUmlCanonicalMapper {
         }
         List<String> warnings = new ArrayList<>(safe(detection.warnings()));
         Map<String, String> classIds = new LinkedHashMap<>();
+        Map<String, AiUmlDetectionResponse.PositionDetection> positions = new LinkedHashMap<>();
         List<UmlClass> classes = new ArrayList<>();
         for (var item : safe(detection.diagram().classes())) {
             String name = required(item.name(), "La IA detectó una clase sin nombre.");
@@ -28,6 +29,7 @@ public class ImageUmlCanonicalMapper {
             String id = UUID.randomUUID().toString();
             classIds.put(key, id);
             if (hasText(item.ref())) classIds.put("ref:" + item.ref(), id);
+            if (validPosition(item.position())) positions.put(id, item.position());
             classes.add(UmlClass.builder().id(id).name(name).isAbstract(Boolean.TRUE.equals(item.abstractClass()))
                     .attributes(mapAttributes(item.attributes(), warnings)).methods(mapMethods(item.methods(), warnings)).build());
         }
@@ -64,9 +66,13 @@ public class ImageUmlCanonicalMapper {
         UmlDiagram diagram = UmlDiagram.builder().id(diagramId).name(diagramName).version(0)
                 .classes(classes).relations(relations).associationClassLinks(links).build();
         List<NodeViewState> nodes = new ArrayList<>();
+        boolean hasCompleteLayout = positions.size() == classes.size();
         for (int index = 0; index < classes.size(); index++) {
-            nodes.add(NodeViewState.builder().classId(classes.get(index).getId()).x(100 + (index % 4) * 320)
-                    .y(100 + (index / 4) * 240).width(240).height(180).build());
+            String classId = classes.get(index).getId();
+            AiUmlDetectionResponse.PositionDetection position = positions.get(classId);
+            double x = hasCompleteLayout ? 100 + position.x() * 1.8 : 100 + (index % 4) * 320;
+            double y = hasCompleteLayout ? 100 + position.y() * 1.3 : 100 + (index / 4) * 240;
+            nodes.add(NodeViewState.builder().classId(classId).x(x).y(y).width(240).height(180).build());
         }
         DiagramViewState view = DiagramViewState.builder().diagramId(diagramId).nodes(nodes).build();
         int attributes = classes.stream().mapToInt(c -> c.getAttributes().size()).sum();
@@ -138,6 +144,12 @@ public class ImageUmlCanonicalMapper {
     }
     private String required(String value, String message) { if (!hasText(value)) throw new IllegalArgumentException(message); return value.trim(); }
     private boolean numeric(String value) { try { return Integer.parseInt(value) >= 0; } catch (Exception ignored) { return false; } }
+    private boolean validPosition(AiUmlDetectionResponse.PositionDetection position) {
+        return position != null && position.x() != null && position.y() != null
+                && Double.isFinite(position.x()) && Double.isFinite(position.y())
+                && position.x() >= 0 && position.x() <= 1000
+                && position.y() >= 0 && position.y() <= 1000;
+    }
     private boolean hasText(String value) { return value != null && !value.isBlank(); }
     private String blankToNull(String value) { return hasText(value) ? value.trim() : null; }
     private <T> List<T> safe(List<T> values) { return values == null ? List.of() : values; }

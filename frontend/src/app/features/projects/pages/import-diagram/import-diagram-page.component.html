@@ -1,0 +1,27 @@
+<div class="page import-page">
+  <a class="back-link" routerLink="/projects">← Mis proyectos</a>
+  <header class="import-heading"><span class="eyebrow">INTEROPERABILIDAD UML</span><h1>Importar diagrama de Enterprise Architect</h1><p>Exporta el modelo desde Architect como XMI o XML. Revisaremos las clases, atributos, métodos y relaciones antes de guardarlo.</p></header>
+  <section class="import-card" aria-labelledby="import-form-title">
+    <h2 id="import-form-title">1. Elige dónde guardarlo</h2>
+    @if (loadingProjects()) { <p class="muted">Cargando proyectos…</p> }
+    @else if (projects().length > 0) {
+      <div class="form-grid">
+        <label>Proyecto<select [value]="selectedProjectId()" (change)="selectProject($any($event.target).value)">@for (project of projects(); track project.id) { <option [value]="project.id">{{ project.name }}</option> }</select></label>
+        <label>Destino del modelo<select [value]="selectedDiagramId()" (change)="selectDiagram($any($event.target).value)" [disabled]="loadingDiagrams()"><option value="NEW">Crear un diagrama nuevo</option>@for (diagram of diagrams(); track diagram.id) { <option [value]="diagram.id">Reemplazar: {{ diagram.name }}</option> }</select></label>
+        @if (selectedDiagramId() === 'NEW') { <label class="full-field">Nombre del nuevo diagrama<input [value]="newDiagramName()" (input)="newDiagramName.set($any($event.target).value)" maxlength="150" placeholder="Ej. Diagrama de clases" /></label> }
+        @else { <label class="replace-check full-field"><input type="checkbox" [checked]="replaceConfirmed()" (change)="replaceConfirmed.set($any($event.target).checked)" /> Confirmo que quiero reemplazar el contenido del diagrama seleccionado.</label> }
+      </div>
+    }
+    <h2>2. Selecciona el archivo exportado</h2>
+    <label class="file-picker"><span class="upload-icon" aria-hidden="true">↥</span><strong>{{ file()?.name ?? 'Selecciona tu archivo XMI/XML' }}</strong><small>En Enterprise Architect, exporta el paquete UML como XMI 2.x. No selecciones archivos de proyecto .qea o .eap.</small><input type="file" accept=".xmi,.xml,application/xml,text/xml" (change)="selectFile($event)" /></label>
+    @if (file()) { <button class="btn btn-primary analyze-button" type="button" [disabled]="analyzing() || loadingDiagrams()" (click)="analyze()">{{ analyzing() ? 'Analizando modelo…' : 'Analizar archivo' }}</button> }
+    @if (preview(); as model) {
+      <div class="preview-box" aria-live="polite"><h2>3. Revisa el modelo detectado</h2><div class="stats"><span><b>{{ model.statistics.classes }}</b> clases</span><span><b>{{ model.statistics.attributes }}</b> atributos</span><span><b>{{ model.statistics.methods }}</b> métodos</span><span><b>{{ model.statistics.relations }}</b> relaciones</span><span><b>{{ model.statistics.associationClasses }}</b> clases de asociación</span></div>
+        <ul class="class-list"><li>@for (umlClass of model.canonicalModel.classes; track umlClass.id) { <span>{{ umlClass.name }}</span> }</li></ul>
+        @if (model.warnings.length) { <div class="warnings"><b>Avisos del archivo</b><ul>@for (warning of model.warnings; track $index) { <li>{{ warning }}</li> }</ul></div> }
+        <button class="btn btn-primary save-button" type="button" [disabled]="!canImport || importing() || loadingDiagrams()" (click)="importModel()">{{ importing() ? 'Guardando…' : (selectedDiagramId() === 'NEW' ? 'Crear diagrama con este modelo' : 'Importar y reemplazar diagrama') }}</button>
+      </div>
+    }
+    @if (error()) { <p class="error-message" role="alert">{{ error() }}</p> }
+  </section>
+</div>

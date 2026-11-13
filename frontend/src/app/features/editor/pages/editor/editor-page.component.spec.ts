@@ -1,7 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ActivatedRoute, provideRouter, Router } from '@angular/router';
 import { TestBed } from '@angular/core/testing';
-import { NEVER, of, throwError } from 'rxjs';
+import { NEVER, of, Subject, throwError } from 'rxjs';
 
 import { DiagramDetail, UmlAttribute, UmlMethod, UmlParameter, UmlRelation } from '../../models/diagram.model';
 import { ExecuteDiagramOperationRequest } from '../../models/diagram-operation.model';
@@ -17,6 +17,7 @@ import { ProjectService } from '../../../projects/services/project.service';
 import { AiAnalysisService } from '../../services/ai-analysis.service';
 import { AiSuggestionsService } from '../../services/ai-suggestions.service';
 import { AiChangeProposalsService } from '../../services/ai-change-proposals.service';
+import { CollaborationService } from '../../services/collaboration.service';
 import { AiChangeProposal } from '../../models/ai-change-proposal.model';
 
 const detail: DiagramDetail = {
@@ -30,12 +31,13 @@ const detail: DiagramDetail = {
   viewState: { diagramId: 'd1', nodes: [], relations: [] },
 };
 
-function configure(operationService: object, current = detail, xmiImport: object = {}, imageImport: object = {}, projectApi: object = { getMyRole: () => of({ role: 'OWNER' }), getMembers: () => of([]) }, aiVoice: object = { interpret: () => NEVER }, imageUpdate: object = { preview: () => NEVER, apply: () => NEVER }, aiAnalysis: object = { analyze: () => NEVER }, aiSuggestions: object = { suggest: () => NEVER }, aiChangeProposals: object = { propose: () => NEVER }): Promise<void> {
+function configure(operationService: object, current = detail, xmiImport: object = {}, imageImport: object = {}, projectApi: object = { getMyRole: () => of({ role: 'OWNER' }), getMembers: () => of([]) }, aiVoice: object = { interpret: () => NEVER }, imageUpdate: object = { preview: () => NEVER, apply: () => NEVER }, aiAnalysis: object = { analyze: () => NEVER }, aiSuggestions: object = { suggest: () => NEVER }, aiChangeProposals: object = { propose: () => NEVER }, diagramApi?: object, collaborationApi?: object): Promise<void> {
   return TestBed.configureTestingModule({
     imports: [EditorPageComponent],
     providers: [
-      { provide: DiagramService, useValue: { getDiagramById: () => of(current) } },
+      { provide: DiagramService, useValue: diagramApi ?? { getDiagramById: () => of(current) } },
       { provide: DiagramOperationService, useValue: operationService },
+      ...(collaborationApi ? [{ provide: CollaborationService, useValue: collaborationApi }] : []),
       { provide: XmiImportService, useValue: { preview: () => NEVER, apply: () => NEVER, ...xmiImport } },
       { provide: ImageImportService, useValue: { preview: () => NEVER, apply: () => NEVER, ...imageImport } },
       { provide: ImageUpdateService, useValue: imageUpdate },
@@ -51,6 +53,36 @@ function configure(operationService: object, current = detail, xmiImport: object
 }
 
 describe('EditorPageComponent', () => {
+  it('resynchronizes and retries an abstract-class toggle once after a WebSocket version conflict', async () => {
+    const current = diagramWithClass();
+    const latest = { ...current, version: 8, canonicalModel: { ...current.canonicalModel, version: 8 } };
+    let operationCount = 0;
+    let refreshCount = 0;
+    const marked: number[] = [];
+    const events = new Subject<any>();
+    await configure(
+      { execute: (_id: string, request: ExecuteDiagramOperationRequest) => {
+        operationCount++;
+        if (operationCount === 1) return throwError(() => ({ reason: 'VERSION_CONFLICT' }));
+        expect(request.operation.baseVersion).toBe(8);
+        return of({ newVersion: 9, canonicalModel: { ...latest.canonicalModel, version: 9, classes: [{ ...latest.canonicalModel.classes[0], isAbstract: true }] }, viewState: latest.viewState });
+      } },
+      current,
+      {}, {}, undefined, undefined, undefined, undefined, undefined, undefined,
+      { getDiagramById: () => { refreshCount++; return of(latest); } },
+      { events, connect: vi.fn(), disconnect: vi.fn(), markResynced: (version: number) => marked.push(version) },
+    );
+    const page = TestBed.createComponent(EditorPageComponent).componentInstance;
+    page.setClassAbstract(current.canonicalModel.classes[0], true, { stopPropagation: () => {} } as unknown as Event);
+
+    expect(operationCount).toBe(2);
+    expect(refreshCount).toBe(2); // Initial load plus one conflict resync.
+    expect(marked).toEqual([8]);
+    expect(page.diagram()?.version).toBe(9);
+    expect(page.diagram()?.canonicalModel.classes[0].isAbstract).toBe(true);
+    expect(page.error()).toBe('');
+  });
+
   it('navigates from the breadcrumb to the loaded diagram project', async () => {
     await configure({ execute: () => NEVER }, { ...detail, projectId: 'small-project' });
     const fixture = TestBed.createComponent(EditorPageComponent);
@@ -871,6 +903,90 @@ describe('EditorPageComponent', () => {
     };
   }
 
+  it('edits an association end cardinality from its canvas label and saves a semantic operation', async () => {
+    const current = diagramWithTwoClassesAndRelation();
+    let request: ExecuteDiagramOperationRequest | undefined;
+    await configure({
+      execute: (_id: string, value: ExecuteDiagramOperationRequest) => {
+        request = value;
+        const relation = current.canonicalModel.relations[0];
+        const updated = { ...relation, sourceMultiplicity: { lower: '0', upper: '*' } };
+        return of({
+          newVersion: 8,
+          canonicalModel: { ...current.canonicalModel, relations: [updated] },
+          viewState: current.viewState,
+        });
+      },
+    }, current);
+    const page = TestBed.createComponent(EditorPageComponent).componentInstance;
+    const relation = current.canonicalModel.relations[0];
+    page.openInlineMultiplicityEditor(relation, 'source', 144, 96, { stopPropagation: () => {} } as unknown as MouseEvent);
+    expect(page.inlineMultiplicityEditor()).toMatchObject({ relationId: 'r1', side: 'source', x: 144, y: 96 });
+    page.updateRelationMultiplicityDraft('source', '0..*');
+    page.saveInlineMultiplicityEditor({ stopPropagation: () => {} } as unknown as MouseEvent);
+    expect(request?.operation.type).toBe('CHANGE_MULTIPLICITY');
+    expect(request?.operation.payload).toMatchObject({ relationId: 'r1', sourceMultiplicity: { lower: '0', upper: '*' } });
+    expect(page.inlineMultiplicityEditor()).toBeNull();
+    expect(page.diagram()?.canonicalModel.relations[0].sourceMultiplicity.upper).toBe('*');
+  });
+
+  it('creates and links a visible intermediate class when an association becomes many-to-many', async () => {
+    const current = diagramWithTwoClassesAndRelation();
+    const relation = current.canonicalModel.relations[0];
+    const requests: ExecuteDiagramOperationRequest[] = [];
+    await configure({
+      execute: (_id: string, request: ExecuteDiagramOperationRequest) => {
+        requests.push(request);
+        if (request.operation.type === 'CHANGE_MULTIPLICITY') {
+          const updated = { ...relation, sourceMultiplicity: { lower: '0', upper: '*' }, targetMultiplicity: { lower: '0', upper: '*' } };
+          return of({ newVersion: 8, canonicalModel: { ...current.canonicalModel, relations: [updated] }, viewState: current.viewState });
+        }
+        return of({
+          newVersion: 9,
+          canonicalModel: {
+            ...current.canonicalModel,
+            version: 9,
+            relations: [{ ...relation, sourceMultiplicity: { lower: '0', upper: '*' }, targetMultiplicity: { lower: '0', upper: '*' } }],
+            classes: [...current.canonicalModel.classes, { id: 'join', name: 'ClaseIntermedia1', isAbstract: false, attributes: [], methods: [] }],
+            associationClassLinks: [{ id: 'join-link', relationId: 'r1', classId: 'join' }],
+          },
+          viewState: { ...current.viewState, nodes: [...current.viewState.nodes, { classId: 'join', x: 100, y: 280, width: 240, height: 180 }] },
+        });
+      },
+    }, current);
+    const page = TestBed.createComponent(EditorPageComponent).componentInstance;
+    page.selectRelation(relation, { stopPropagation: () => {} } as unknown as MouseEvent);
+    page.updateRelationMultiplicityDraft('source', '0..*');
+    page.updateRelationMultiplicityDraft('target', '0..*');
+    page.saveRelationMultiplicity();
+
+    expect(requests.map(request => request.operation.type)).toEqual(['CHANGE_MULTIPLICITY', 'CREATE_ASSOCIATION_CLASS']);
+    expect(requests[1].operation.payload).toMatchObject({ relationId: 'r1', name: 'ClaseIntermedia1' });
+    expect(page.diagram()?.canonicalModel.classes.some(umlClass => umlClass.name === 'ClaseIntermedia1')).toBe(true);
+    expect(page.diagram()?.canonicalModel.associationClassLinks?.[0]).toMatchObject({ relationId: 'r1', classId: 'join' });
+  });
+
+  it('hides canvas cardinalities for inheritance and dependency relations', async () => {
+    const current = diagramWithTwoClassesAndRelation();
+    current.canonicalModel.relations[0].type = 'DEPENDENCY';
+    await configure({ execute: () => NEVER }, current);
+    const fixture = TestBed.createComponent(EditorPageComponent);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelectorAll('.relation-label')).toHaveLength(0);
+  });
+
+  it('hides aggregation and composition cardinalities while preserving the relation line', async () => {
+    const current = diagramWithTwoClassesAndRelation();
+    current.canonicalModel.relations[0].type = 'COMPOSITION';
+    await configure({ execute: () => NEVER }, current);
+    const fixture = TestBed.createComponent(EditorPageComponent);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelectorAll('.relation-label')).toHaveLength(0);
+    expect(fixture.nativeElement.querySelector('.relation-line')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.relation-line').getAttribute('d')).toBeTruthy();
+  });
+
   it('opens class deletion and applies DELETE_CLASS response authoritatively', async () => {
     const current = diagramWithClass();
     let request: ExecuteDiagramOperationRequest | undefined;
@@ -1231,7 +1347,7 @@ describe('EditorPageComponent', () => {
     expect(page.diagram()?.version).toBe(8);
   });
 
-  it('previews a selected class during drag and sends one MOVE_CLASS on release', async () => {
+  it('previews a selected class during drag and commits its position without a semantic version operation', async () => {
     const current = diagramWithClass();
     let executions = 0;
     let request: ExecuteDiagramOperationRequest | undefined;
@@ -1255,6 +1371,9 @@ describe('EditorPageComponent', () => {
     const fixture = TestBed.createComponent(EditorPageComponent);
     await fixture.whenStable();
     const page = fixture.componentInstance;
+    const collaboration = TestBed.inject(CollaborationService);
+    const preview = vi.spyOn(collaboration, 'sendClassPositionPreview');
+    const commit = vi.spyOn(collaboration, 'commitClassPosition').mockReturnValue('move-1');
     const card = fixture.nativeElement.querySelector('.uml-class') as HTMLElement;
     const canvas = fixture.nativeElement.querySelector('.canvas') as HTMLElement;
     Object.defineProperty(canvas, 'getBoundingClientRect', {
@@ -1279,11 +1398,11 @@ describe('EditorPageComponent', () => {
     expect(page.dragState()?.isDragging).toBe(true);
     expect(page.renderedClasses()[0].x).toBe(220);
     page.onCanvasPointerUp({ currentTarget: canvas, pointerId: 1 } as unknown as PointerEvent);
-    expect(executions).toBe(1);
-    expect(request?.operation.type).toBe('MOVE_CLASS');
-    expect(request?.operation.baseVersion).toBe(7);
-    expect(request?.operation.payload).toEqual({ classId: 'c1', x: 220, y: 180 });
-    expect(page.diagram()?.version).toBe(8);
+    expect(executions).toBe(0);
+    expect(request).toBeUndefined();
+    expect(preview).toHaveBeenCalledWith('c1', 220, 180);
+    expect(commit).toHaveBeenCalledWith('c1', 220, 180);
+    expect(page.diagram()?.version).toBe(7);
     expect(page.dragState()).toBeNull();
   });
 
@@ -1436,6 +1555,22 @@ describe('EditorPageComponent', () => {
     expect(fixture.componentInstance.editingClassId()).toBe('c1');
   });
 
+  it('exposes a visible rename control on every editable class card', async () => {
+    const current = diagramWithClass();
+    current.canonicalModel.classes.push({ id: 'c2', name: 'Clase2', isAbstract: false, attributes: [], methods: [] });
+    current.viewState.nodes.push({ classId: 'c2', x: 300, y: 20, width: 240, height: 180 });
+    await configure({ execute: () => NEVER }, current);
+    const fixture = TestBed.createComponent(EditorPageComponent);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const renameButtons = fixture.nativeElement.querySelectorAll('.class-rename-trigger') as NodeListOf<HTMLButtonElement>;
+    expect(renameButtons).toHaveLength(2);
+    renameButtons[1].click();
+    fixture.detectChanges();
+    expect(fixture.componentInstance.editingClassId()).toBe('c2');
+    expect(fixture.nativeElement.querySelector('[data-class-name="c2"]')).not.toBeNull();
+  });
+
   it('cancels inline editing with Escape without deleting the class', async () => {
     const current = {
       ...detail,
@@ -1498,6 +1633,27 @@ describe('EditorPageComponent', () => {
     page.confirmInlineEdit();
     expect(executions).toBe(0);
     expect(page.renameError()).toContain('Ya existe');
+  });
+
+  it('rejects names that sanitize to the same generated Java class', async () => {
+    const current = {
+      ...detail,
+      canonicalModel: {
+        ...detail.canonicalModel,
+        classes: [
+          { id: 'c1', name: 'MiClase', isAbstract: false, attributes: [], methods: [] },
+          { id: 'c2', name: 'Temporal', isAbstract: false, attributes: [], methods: [] },
+        ],
+      },
+    };
+    let executions = 0;
+    await configure({ execute: () => { executions++; return of({}); } }, current);
+    const page = TestBed.createComponent(EditorPageComponent).componentInstance;
+    page.beginInlineEdit('c2');
+    page.editingName.set('Mi Clase');
+    page.confirmInlineEdit();
+    expect(executions).toBe(0);
+    expect(page.renameError()).toContain('nombre Java generado');
   });
 
   it('returns to select and reports a conflict when creation fails', async () => {

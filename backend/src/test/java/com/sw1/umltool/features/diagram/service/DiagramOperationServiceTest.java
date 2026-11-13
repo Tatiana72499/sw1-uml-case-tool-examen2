@@ -55,14 +55,9 @@ class DiagramOperationServiceTest {
     }
 
     @Test
-    void moveChangesOnlyCopiedViewState() {
-        OperationExecutionResult result = execute(0, DiagramOperationType.MOVE_CLASS,
-                MoveClassPayload.builder().classId("class-1").x(50).y(60).build());
-
-        assertEquals(0, viewState.getNodes().get(0).getX());
-        assertEquals(50, result.getViewState().getNodes().get(0).getX());
-        assertEquals(60, result.getViewState().getNodes().get(0).getY());
-        assertEquals(1, result.getNewVersion());
+    void rejectsCanvasMoveOnVersionedSemanticOperationChannel() {
+        assertThrows(OperationApplicationException.class, () -> execute(0, DiagramOperationType.MOVE_CLASS,
+                MoveClassPayload.builder().classId("class-1").x(50).y(60).build()));
     }
 
     @Test
@@ -70,11 +65,12 @@ class DiagramOperationServiceTest {
         OperationExecutionResult first = execute(0, DiagramOperationType.RENAME_CLASS,
                 RenameClassPayload.builder().classId("class-1").name("Client").build());
         OperationExecutionResult second = service.execute(operation("operation-2", 1,
-                DiagramOperationType.MOVE_CLASS, MoveClassPayload.builder().classId("class-1").x(10).y(20).build()),
+                DiagramOperationType.CREATE_CLASS, CreateClassPayload.builder().classId("class-3").name("Invoice").build()),
                 first.getDiagram(), first.getViewState());
 
         assertEquals(2, second.getNewVersion());
         assertEquals("Client", second.getDiagram().getClasses().get(0).getName());
+        assertEquals("Invoice", second.getDiagram().getClasses().get(2).getName());
     }
 
     @Test

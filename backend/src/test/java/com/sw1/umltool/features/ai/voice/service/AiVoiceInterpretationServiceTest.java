@@ -3,6 +3,8 @@ package com.sw1.umltool.features.ai.voice.service;
 import com.sun.net.httpserver.HttpServer;
 import com.sw1.umltool.features.ai.voice.dto.AiVoiceInterpretRequest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -61,6 +63,32 @@ class AiVoiceInterpretationServiceTest {
             var command = serviceFor(server, 10, 30).interpret(REQUEST).command();
             assertEquals("RENAME_ATTRIBUTE", command.type());
             assertEquals("nombreCompleto", command.newAttributeName());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "CREATE_CLASS,Cliente",
+            "LIST_CLASSES,",
+            "DELETE_CLASS,Cliente",
+            "ADD_ATTRIBUTE,Cliente",
+            "RENAME_ATTRIBUTE,Cliente"
+    })
+    void acceptsCommonVoiceCommandFamilies(String type, String className) throws Exception {
+        String commandFields = switch (type) {
+            case "CREATE_CLASS", "DELETE_CLASS" -> "\"className\":\"Cliente\"";
+            case "ADD_ATTRIBUTE" -> "\"className\":\"Cliente\",\"attributeName\":\"email\",\"attributeType\":\"String\"";
+            case "RENAME_ATTRIBUTE" -> "\"className\":\"Cliente\",\"attributeName\":\"email\",\"newAttributeName\":\"correo\"";
+            default -> "";
+        };
+        HttpServer server = server(exchange -> respond(exchange, 200,
+                "{\"success\":true,\"command\":{\"type\":\"" + type + "\"" + (commandFields.isEmpty() ? "" : "," + commandFields) + "},\"confidence\":0.9,\"summary\":\"ok\",\"errors\":[]}"));
+        try {
+            var response = serviceFor(server, 10, 30).interpret(REQUEST);
+            assertEquals(type, response.command().type());
+            assertEquals(className, response.command().className());
         } finally {
             server.stop(0);
         }

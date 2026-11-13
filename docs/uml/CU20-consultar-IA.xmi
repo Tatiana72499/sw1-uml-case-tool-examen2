@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xmi:XMI xmi:version="2.5" xmlns:xmi="http://www.omg.org/spec/XMI/20131001" xmlns:uml="http://www.omg.org/spec/UML/20161101">
+  <uml:Model xmi:id="model_cu20" name="CU20 - Consulta a la IA">
+    <packagedElement xmi:type="uml:UseCase" xmi:id="uc_cu20" name="CU20 Consultar a la IA como asistente técnico y mentor"/>
+    <packagedElement xmi:type="uml:Actor" xmi:id="actor_a1" name="A1 Propietario del Proyecto"/>
+    <packagedElement xmi:type="uml:Actor" xmi:id="actor_a2" name="A2 Editor"/>
+    <packagedElement xmi:type="uml:Actor" xmi:id="actor_a3" name="A3 Visualizador"/>
+    <packagedElement xmi:type="uml:Association" xmi:id="assoc_a1_cu20" name="A1 consulta a la IA">
+      <memberEnd xmi:idref="end_a1"/><memberEnd xmi:idref="end_cu20_a1"/>
+      <ownedEnd xmi:type="uml:Property" xmi:id="end_a1" name="A1" type="actor_a1" association="assoc_a1_cu20"/>
+      <ownedEnd xmi:type="uml:Property" xmi:id="end_cu20_a1" name="CU20" type="uc_cu20" association="assoc_a1_cu20"/>
+    </packagedElement>
+    <packagedElement xmi:type="uml:Association" xmi:id="assoc_a2_cu20" name="A2 consulta a la IA">
+      <memberEnd xmi:idref="end_a2"/><memberEnd xmi:idref="end_cu20_a2"/>
+      <ownedEnd xmi:type="uml:Property" xmi:id="end_a2" name="A2" type="actor_a2" association="assoc_a2_cu20"/>
+      <ownedEnd xmi:type="uml:Property" xmi:id="end_cu20_a2" name="CU20" type="uc_cu20" association="assoc_a2_cu20"/>
+    </packagedElement>
+    <packagedElement xmi:type="uml:Association" xmi:id="assoc_a3_cu20" name="A3 consulta a la IA">
+      <memberEnd xmi:idref="end_a3"/><memberEnd xmi:idref="end_cu20_a3"/>
+      <ownedEnd xmi:type="uml:Property" xmi:id="end_a3" name="A3" type="actor_a3" association="assoc_a3_cu20"/>
+      <ownedEnd xmi:type="uml:Property" xmi:id="end_cu20_a3" name="CU20" type="uc_cu20" association="assoc_a3_cu20"/>
+    </packagedElement>
+    <packagedElement xmi:type="uml:Package" xmi:id="diagram_elements" name="Elementos del diagrama">
+      <packagedElement xmi:type="uml:Component" xmi:id="system_boundary" name="Herramienta CASE web colaborativa"/>
+    </packagedElement>
+  </uml:Model>
+</xmi:XMI>

@@ -14,18 +14,95 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import java.util.zip.ZipInputStream;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaFileObject;
+import javax.tools.ToolProvider;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class GeneratorServiceTest {
+    @Test
+    void generatedManyToManyBackendJavaSourcesCompile(@TempDir Path temporaryDirectory) throws Exception {
+        UmlClass source = UmlClass.builder().id("cliente").name("Cliente").build();
+        UmlClass target = UmlClass.builder().id("curso").name("Curso").build();
+        UmlRelation relation = UmlRelation.builder().id("matricula").sourceClassId("cliente").targetClassId("curso")
+                .type(RelationType.ASSOCIATION).sourceMultiplicity(new Multiplicity("0", "*"))
+                .targetMultiplicity(new Multiplicity("0", "*")).build();
+        UmlDiagram diagram = UmlDiagram.builder().id("d1").name("Matriculas")
+                .classes(List.of(source, target)).relations(List.of(relation)).build();
+        byte[] zip = generate(mockSerializer(diagram), null);
+        Path sourceRoot = temporaryDirectory.resolve("src");
+        Path classes = temporaryDirectory.resolve("classes");
+        Files.createDirectories(classes);
+        List<Path> javaFiles = new ArrayList<>();
+        try (ZipInputStream input = new ZipInputStream(new ByteArrayInputStream(zip), StandardCharsets.UTF_8)) {
+            for (var entry = input.getNextEntry(); entry != null; entry = input.getNextEntry()) {
+                if (!entry.isDirectory() && entry.getName().endsWith(".java")) {
+                    Path sourceFile = sourceRoot.resolve(entry.getName().substring(entry.getName().indexOf('/') + 1));
+                    Files.createDirectories(sourceFile.getParent());
+                    Files.write(sourceFile, input.readAllBytes());
+                    javaFiles.add(sourceFile);
+                }
+            }
+        }
+
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        assertNotNull(compiler, "Se necesita un JDK para validar el backend generado");
+        var diagnostics = new DiagnosticCollector<JavaFileObject>();
+        try (var fileManager = compiler.getStandardFileManager(diagnostics, null, StandardCharsets.UTF_8)) {
+            Iterable<? extends JavaFileObject> units = fileManager.getJavaFileObjectsFromPaths(javaFiles);
+            String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+            boolean compiled = compiler.getTask(null, fileManager, diagnostics,
+                    List.of("-classpath", classpath, "-d", classes.toString(), "-proc:none"), null, units).call();
+            assertTrue(compiled, diagnostics.getDiagnostics().toString());
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("manyToManyBridgeCases")
+    void generatesCompleteBackendForManyToManyIntermediateEntity(int caseNumber) throws Exception {
+        String sourceName = "Cliente " + caseNumber;
+        String targetName = "Curso " + caseNumber;
+        String sourceType = "Cliente" + caseNumber;
+        String targetType = "Curso" + caseNumber;
+        String bridgeType = sourceType + targetType;
+        UmlClass source = UmlClass.builder().id("cliente").name(sourceName).build();
+        UmlClass target = UmlClass.builder().id("curso").name(targetName).build();
+        UmlRelation relation = UmlRelation.builder().id("matricula").sourceClassId("cliente").targetClassId("curso")
+                .type(RelationType.ASSOCIATION).sourceMultiplicity(new Multiplicity("0", "*"))
+                .targetMultiplicity(new Multiplicity("0", "*")).build();
+        UmlDiagram diagram = UmlDiagram.builder().id("d1").name("Matriculas")
+                .classes(List.of(source, target)).relations(List.of(relation)).build();
+
+        byte[] zip = generate(mockSerializer(diagram), null);
+        String base = "generated-backend/src/main/java/com/generated/app/";
+        String bridgeEntity = entry(zip, base + "entity/" + bridgeType + ".java");
+        assertTrue(bridgeEntity.contains("public class " + bridgeType), "case " + caseNumber);
+        assertTrue(bridgeEntity.contains("private " + sourceType + " cliente" + caseNumber + ";"), "case " + caseNumber);
+        assertTrue(bridgeEntity.contains("private " + targetType + " curso" + caseNumber + ";"), "case " + caseNumber);
+        assertTrue(bridgeEntity.contains("uniqueConstraints = @UniqueConstraint(columnNames = {\"cliente" + caseNumber + "_id\", \"curso" + caseNumber + "_id\"})"), "case " + caseNumber);
+        assertTrue(containsEntry(zip, base + "repository/" + bridgeType + "Repository.java"), "case " + caseNumber);
+        assertTrue(containsEntry(zip, base + "service/" + bridgeType + "Service.java"), "case " + caseNumber);
+        assertTrue(containsEntry(zip, base + "controller/" + bridgeType + "Controller.java"), "case " + caseNumber);
+    }
+
+    private static Stream<Arguments> manyToManyBridgeCases() {
+        return IntStream.range(1, 101).mapToObj(Arguments::of);
+    }
+
     @Test
     void subclassDtosContainEffectiveInheritedAttributesWithoutDuplicateId() throws Exception {
         UmlClass persona = UmlClass.builder().id("persona").name("Persona")

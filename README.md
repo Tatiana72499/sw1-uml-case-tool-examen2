@@ -34,3 +34,13 @@ backend/   Backend de la herramienta CASE
 frontend/  Aplicación web
 docs/      Documentación académica y técnica
 tests/     Pruebas generales
+```
+
+## Documentación del segundo parcial
+
+- [Introducción, objetivos y alcance actualizados](docs/introduccion-y-alcance-actualizados.md)
+- [Informe del segundo parcial: requisitos, casos de uso y arquitectura](docs/informe-segundo-parcial.md)
+- [Casos de uso de la ampliación con IA y chat grupal](docs/use-cases-second-partial.md)
+- [Fases de implementación del chat con IA](docs/ai-chat-phase1.md),
+  [Fase 2](docs/ai-chat-phase2.md) y [Fase 3](docs/ai-chat-phase3.md)
+- [Arquitectura del proyecto](docs/architecture.md)

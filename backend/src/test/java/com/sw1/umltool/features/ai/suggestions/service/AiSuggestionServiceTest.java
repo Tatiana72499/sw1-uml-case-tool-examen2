@@ -5,6 +5,8 @@ import com.sw1.umltool.features.ai.analysis.service.AiAnalysisContextService;
 import com.sw1.umltool.features.ai.chat.service.AiOrchestrator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.Map;
@@ -50,13 +52,30 @@ class AiSuggestionServiceTest {
     }
 
     @Test
-    void rejectsUnknownElementIds() {
+    void dropsSuggestionsThatReferenceUnknownElementIds() {
         when(context.prepare("p1", "u1", null)).thenReturn(
                 new AiAnalysisContextService.PreparedContext("p1", "context", Map.of()));
         when(orchestrator.submitPrompt(anyString(), anyString())).thenReturn(CompletableFuture.completedFuture(
                 "{\"suggestions\":[{\"category\":\"GENERAL\",\"elementId\":\"missing\",\"title\":\"x\",\"reason\":\"x\",\"proposal\":\"x\"}]}"));
 
-        assertThrows(AiAnalysisException.class, () -> service.suggest("p1", "u1", null));
+        assertEquals(0, service.suggest("p1", "u1", null).suggestions().size());
+    }
+
+    @Test
+    void keepsValidSuggestionsWhenAnotherSuggestionHasAHallucinatedId() {
+        when(context.prepare("p1", "u1", null)).thenReturn(
+                new AiAnalysisContextService.PreparedContext("p1", "context", Map.of(
+                        "class-1", new AiAnalysisContextService.ElementDescriptor(
+                                "class-1", AiAnalysisContextService.ElementKind.CLASS, "Cliente"))));
+        when(orchestrator.submitPrompt(anyString(), anyString())).thenReturn(CompletableFuture.completedFuture(
+                "{\"suggestions\":[" +
+                        "{\"category\":\"RELATIONSHIP\",\"elementId\":\"missing\",\"title\":\"Inventada\",\"reason\":\"x\",\"proposal\":\"x\"}," +
+                        "{\"category\":\"GENERAL\",\"elementId\":null,\"title\":\"Revisar el alcance\",\"reason\":\"El diagrama no expresa el dominio\",\"proposal\":\"Confirma qué proceso representa\"}]}"));
+
+        var response = service.suggest("p1", "u1", null);
+
+        assertEquals(1, response.suggestions().size());
+        assertEquals("Revisar el alcance", response.suggestions().getFirst().title());
     }
 
     @Test
@@ -70,23 +89,57 @@ class AiSuggestionServiceTest {
     }
 
     @Test
-    void sendsFocusedConditionalGuidanceAndKeepsAtMostThreeSimulatedSuggestions() {
+    void sendsFocusedGuidanceAndSupportsTenDistinctEvidenceBasedSuggestions() {
         when(context.prepare("p1", "u1", null)).thenReturn(
                 new AiAnalysisContextService.PreparedContext("p1", "context", Map.of()));
+        String suggestions = java.util.stream.IntStream.range(0, 10)
+                .mapToObj(index -> "{\"category\":\"GENERAL\",\"elementId\":null,\"title\":\"Idea " + index
+                        + "\",\"reason\":\"evidencia " + index + "\",\"proposal\":\"opción " + index + "\"}")
+                .collect(java.util.stream.Collectors.joining(","));
         when(orchestrator.submitPrompt(anyString(), eq("context"))).thenReturn(CompletableFuture.completedFuture(
-                "{\"suggestions\":[" +
-                        "{\"category\":\"GENERAL\",\"elementId\":null,\"title\":\"A\",\"reason\":\"r\",\"proposal\":\"p\"}," +
-                        "{\"category\":\"GENERAL\",\"elementId\":null,\"title\":\"B\",\"reason\":\"r\",\"proposal\":\"p\"}," +
-                        "{\"category\":\"GENERAL\",\"elementId\":null,\"title\":\"C\",\"reason\":\"r\",\"proposal\":\"p\"}]}"));
+                "{\"suggestions\":[" + suggestions + "]}"));
 
         var response = service.suggest("p1", "u1", null);
         var prompt = forClass(String.class);
         verify(orchestrator).submitPrompt(prompt.capture(), eq("context"));
 
-        assertEquals(3, response.suggestions().size());
-        assertTrue(prompt.getValue().contains("maximo 3"));
-        assertTrue(prompt.getValue().contains("ciclo de vida"));
-        assertTrue(prompt.getValue().contains("no propongas metodos solo porque no existan"));
+        assertEquals(10, response.suggestions().size());
+        assertTrue(prompt.getValue().contains("hasta 10 sugerencias"));
+        assertTrue(prompt.getValue().contains("desarrollador sénior"));
+        assertTrue(prompt.getValue().contains("RELATIONSHIP"));
+        assertTrue(prompt.getValue().contains("No inventes ni reconstruyas IDs"));
+    }
+
+    @Test
+    void rejectsMoreThanTenSuggestionsInsteadOfSilentlyTruncating() {
+        when(context.prepare("p1", "u1", null)).thenReturn(
+                new AiAnalysisContextService.PreparedContext("p1", "context", Map.of()));
+        String suggestions = java.util.stream.IntStream.range(0, 11)
+                .mapToObj(index -> "{\"category\":\"GENERAL\",\"elementId\":null,\"title\":\"Idea " + index
+                        + "\",\"reason\":\"evidencia\",\"proposal\":\"opción\"}")
+                .collect(java.util.stream.Collectors.joining(","));
+        when(orchestrator.submitPrompt(anyString(), eq("context"))).thenReturn(
+                CompletableFuture.completedFuture("{\"suggestions\":[" + suggestions + "]}"));
+
+        assertThrows(AiAnalysisException.class, () -> service.suggest("p1", "u1", null));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2, 3, 5, 10})
+    void keepsEachRequestedSuggestionBatchWithinTheTenItemLimit(int count) {
+        when(context.prepare("p1", "u1", null)).thenReturn(
+                new AiAnalysisContextService.PreparedContext("p1", "context", Map.of()));
+        String suggestions = java.util.stream.IntStream.range(0, count)
+                .mapToObj(index -> "{\"category\":\"GENERAL\",\"elementId\":null,\"title\":\"Sugerencia " + index
+                        + "\",\"reason\":\"evidencia específica " + index + "\",\"proposal\":\"alternativa " + index + "\"}")
+                .collect(java.util.stream.Collectors.joining(","));
+        when(orchestrator.submitPrompt(anyString(), eq("context"))).thenReturn(
+                CompletableFuture.completedFuture("{\"suggestions\":[" + suggestions + "]}"));
+
+        var response = service.suggest("p1", "u1", null);
+
+        assertEquals(count, response.suggestions().size());
+        assertTrue(response.summary().contains(Integer.toString(count)));
     }
 
     @Test
@@ -107,6 +160,6 @@ class AiSuggestionServiceTest {
         var response = service.suggest("ventas", "u1", "d1");
 
         assertEquals(0, response.suggestions().size());
-        assertEquals("No se encontraron sugerencias para revisar.", response.summary());
+        assertTrue(response.summary().startsWith("No se encontraron sugerencias válidas"));
     }
 }

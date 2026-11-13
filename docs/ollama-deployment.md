@@ -1,8 +1,8 @@
 # Ollama en Docker
 
-Esta configuración prepara Ollama para el futuro uso desde Spring AI. En esta
-fase no se instala Spring AI ni se ejecuta ningún modelo automáticamente al
-arrancar el backend.
+El chat privado y grupal de la herramienta usa Ollama por medio de Spring AI.
+El backend puede iniciar aunque Ollama no tenga un modelo instalado, pero las
+consultas de IA fallarán hasta descargar el modelo indicado por `OLLAMA_MODEL`.
 
 ## Arquitectura
 
@@ -27,22 +27,19 @@ docker compose ps
 docker compose logs -f ollama
 ```
 
-Descargar el modelo una sola vez dentro del volumen persistente:
+Descargar el mismo modelo que está configurado en el backend. En PowerShell:
 
 ```powershell
-docker compose --profile ollama exec ollama ollama pull qwen3.5:4b
+$model = docker exec umltool-backend printenv OLLAMA_MODEL
+docker exec umltool-ollama ollama pull $model
 docker compose --profile ollama exec ollama ollama list
 docker compose --profile ollama exec ollama ollama ps
 ```
 
-El modelo recomendado es `qwen3.5:4b`. En el entorno validado ocupa
-aproximadamente 3.1 GB en memoria de Ollama. Seleccionarlo explícitamente con
-`OLLAMA_MODEL` cuando la
-integración Spring AI esté implementada. Para una máquina AWS más limitada se
-puede usar, por ejemplo, `qwen3:1.7b` o `qwen3:0.6b`, sin cambiar el Compose.
-
-El nombre de modelo es una configuración de la futura integración; esta fase
-no hace `pull` ni `run` durante el arranque.
+El modelo recomendado por el ejemplo es `qwen3.5:4b`. El nombre y tamaño del
+modelo dependen de la configuración del despliegue. Si se cambia `OLLAMA_MODEL`,
+hay que descargar esa misma etiqueta en el volumen antes de volver a consultar
+la IA. El contenedor Ollama no descarga modelos automáticamente.
 
 ## GPU NVIDIA opcional
 
@@ -65,7 +62,7 @@ instancia sin GPU se debe usar el Compose base y un modelo más pequeño.
 | Variable | Valor inicial | Uso |
 | --- | --- | --- |
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | URL privada consumida por el backend |
-| `OLLAMA_MODEL` | `qwen3.5:4b` | Modelo usado por Spring AI |
+| `OLLAMA_MODEL` | `qwen3.5:4b` | Modelo usado por Spring AI; debe existir en Ollama |
 | `OLLAMA_NUM_CTX` | `4096` | Contexto inicial de la conversación |
 | `OLLAMA_KEEP_ALIVE` | `2m` | Tiempo de permanencia del modelo cargado |
 | `OLLAMA_NUM_PARALLEL` | `1` | Solicitudes paralelas iniciales |

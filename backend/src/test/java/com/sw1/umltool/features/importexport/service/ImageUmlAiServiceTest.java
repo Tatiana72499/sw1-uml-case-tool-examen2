@@ -3,6 +3,8 @@ package com.sw1.umltool.features.importexport.service;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.IOException;
@@ -32,6 +34,21 @@ class ImageUmlAiServiceTest {
         } finally { server.stop(0); }
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {0, 1, 2, 3, 5})
+    void acceptsImageModelsWithDifferentClassCounts(int classCount) throws Exception {
+        String classes = java.util.stream.IntStream.range(0, classCount)
+                .mapToObj(index -> "{\"name\":\"Clase" + index + "\",\"attributes\":[],\"methods\":[]}")
+                .collect(java.util.stream.Collectors.joining(","));
+        HttpServer server = server(exchange -> respond(exchange, 200,
+                "{\"success\":true,\"diagram\":{\"classes\":[" + classes
+                        + "],\"relations\":[],\"associationClasses\":[]},\"warnings\":[],\"confidence\":0.9}"));
+        try {
+            var response = service(server, 10, 30).interpret(PNG, "modelo.png", "image/png");
+            assertEquals(classCount, response.diagram().classes().size());
+        } finally { server.stop(0); }
+    }
+
     @Test
     void acceptsResponsesThatOmitOptionalBooleanFields() throws Exception {
         String responseBody = "{\"success\":true,\"diagram\":{"
@@ -51,6 +68,16 @@ class ImageUmlAiServiceTest {
         HttpServer server = server(exchange -> respond(exchange, 422, "{\"error\":\"invalid image\"}"));
         try { assertThrows(IllegalStateException.class, () -> service(server, 10, 30).interpret(PNG, "modelo.png", "image/png")); }
         finally { server.stop(0); }
+    }
+
+    @Test
+    void explainsThatTheN8nWebhookIsNotRegisteredWhenUpstreamReturnsNotFound() throws Exception {
+        HttpServer server = server(exchange -> respond(exchange, 404, "The requested webhook is not registered"));
+        try {
+            IllegalStateException exception = assertThrows(IllegalStateException.class,
+                    () -> service(server, 10, 30).interpret(PNG, "modelo.png", "image/png"));
+            assertTrue(exception.getMessage().contains("webhook de interpretación visual no está registrado"));
+        } finally { server.stop(0); }
     }
 
     @Test

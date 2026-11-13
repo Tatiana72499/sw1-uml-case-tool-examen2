@@ -71,6 +71,8 @@ public class CollaborationWebSocketHandler extends TextWebSocketHandler {
         else if ("LEAVE_DIAGRAM".equals(type)) leave(session);
         else if ("APPLY_OPERATION".equals(type)) apply(session, root);
         else if ("CURSOR_MOVE".equals(type)) cursorMove(session, root);
+        else if ("CLASS_POSITION_PREVIEW".equals(type)) classPosition(session, root, false);
+        else if ("CLASS_POSITION_COMMIT".equals(type)) classPosition(session, root, true);
         else if ("SELECTION_CHANGE".equals(type)) selectionChange(session, root);
         else if ("CHAT_PROJECT_SUBSCRIBE".equals(type)) chatSubscribe(session, root);
         else if ("CHAT_PROJECT_UNSUBSCRIBE".equals(type)) chatUnsubscribe(session, root);
@@ -85,6 +87,80 @@ public class CollaborationWebSocketHandler extends TextWebSocketHandler {
         double y = root.path("y").asDouble();
         if (!Double.isFinite(x) || !Double.isFinite(y)) return;
         sendToOthers(diagramId, session, Map.of("type", "REMOTE_CURSOR", "diagramId", diagramId, "user", presenceUser(session, diagramId), "x", x, "y", y));
+    }
+
+    private void classPosition(WebSocketSession session, JsonNode root, boolean commit) throws IOException {
+        String diagramId = text(root, "diagramId");
+        String classId = text(root, "classId");
+        if (!joinedOn(session, diagramId)) return;
+        if (!root.path("x").isNumber() || !root.path("y").isNumber()) return;
+        double x = root.path("x").asDouble();
+        double y = root.path("y").asDouble();
+        if (!Double.isFinite(x) || !Double.isFinite(y) || Math.abs(x) > 1_000_000 || Math.abs(y) > 1_000_000) return;
+
+        var entity = diagrams.findById(diagramId).orElse(null);
+        if (entity == null) {
+            rejectClassPosition(session, diagramId, classId, textOrNull(root, "moveId"), "El diagrama ya no existe.");
+            return;
+        }
+        String userId = userId(session);
+        ProjectMemberRole role = access.resolveRole(entity.getProjectId(), userId);
+        if (role != ProjectMemberRole.OWNER && role != ProjectMemberRole.EDITOR) {
+            rejectClassPosition(session, diagramId, classId, textOrNull(root, "moveId"), "No tienes permiso para mover clases.");
+            return;
+        }
+
+        Map<String, Object> event = new HashMap<>();
+        event.put("type", commit ? "CLASS_POSITION_SAVED" : "CLASS_POSITION_PREVIEW");
+        event.put("diagramId", diagramId);
+        event.put("classId", classId);
+        event.put("x", x);
+        event.put("y", y);
+        event.put("user", presenceUser(session, diagramId));
+        String moveId = textOrNull(root, "moveId");
+        if (moveId != null) event.put("moveId", moveId);
+
+        if (!commit) {
+            sendToOthers(diagramId, session, event);
+            return;
+        }
+        if (moveId == null || moveId.isBlank()) {
+            rejectClassPosition(session, diagramId, classId, null, "Falta el identificador del movimiento.");
+            return;
+        }
+
+        synchronized (diagramLocks.computeIfAbsent(diagramId, ignored -> new Object())) {
+            try {
+                operations.saveClassPosition(diagramId, classId, x, y, userId);
+                for (WebSocketSession target : broadcaster.sessions(diagramId)) send(target, event);
+            } catch (RuntimeException error) {
+                log.warn("[WS POSITION REJECTED] diagramId={} classId={} moveId={} reason={}",
+                        diagramId, classId, moveId, error.getMessage());
+                rejectClassPosition(session, diagramId, classId, moveId,
+                        error.getMessage() == null ? "No se pudo guardar la posición." : error.getMessage());
+            }
+        }
+    }
+
+    private void rejectClassPosition(WebSocketSession session, String diagramId, String classId,
+                                     String moveId, String reason) throws IOException {
+        Map<String, Object> message = new HashMap<>();
+        message.put("type", "CLASS_POSITION_REJECTED");
+        message.put("diagramId", diagramId);
+        message.put("classId", classId);
+        if (moveId != null) message.put("moveId", moveId);
+        message.put("errorMessage", reason);
+        Set<WebSocketSession> recipients = broadcaster.sessions(diagramId);
+        if (recipients.isEmpty()) {
+            send(session, message);
+        } else {
+            for (WebSocketSession recipient : recipients) send(recipient, message);
+        }
+    }
+
+    private String textOrNull(JsonNode node, String field) {
+        String value = node.path(field).asText(null);
+        return value == null || value.isBlank() ? null : value;
     }
 
     private void selectionChange(WebSocketSession session, JsonNode root) throws IOException {
@@ -175,6 +251,8 @@ public class CollaborationWebSocketHandler extends TextWebSocketHandler {
         broadcaster.add(diagramId, session);
         if (knownVersion != diagram.getVersion()) send(session, Map.of("type", "RESYNC_REQUIRED", "diagramId", diagramId, "serverVersion", diagram.getVersion()));
         send(session, Map.of("type", "JOINED", "diagramId", diagramId, "version", diagram.getVersion()));
+        send(session, Map.of("type", "DIAGRAM_LAYOUT_SYNC", "diagramId", diagramId, "version", diagram.getVersion(),
+                "viewState", objectMapper.readTree(diagram.getViewStateJson())));
         broadcastPresence(diagramId);
     }
 

@@ -8,7 +8,14 @@ public record AiUmlDetectionResponse(boolean success, DiagramDetection diagram, 
     public record DiagramDetection(List<ClassDetection> classes, List<RelationDetection> relations,
                                    List<AssociationClassDetection> associationClasses) {}
     public record ClassDetection(String ref, String name, @JsonProperty("abstract") Boolean abstractClass,
-                                 List<AttributeDetection> attributes, List<MethodDetection> methods) {}
+                                 List<AttributeDetection> attributes, List<MethodDetection> methods,
+                                 PositionDetection position) {
+        public ClassDetection(String ref, String name, Boolean abstractClass,
+                              List<AttributeDetection> attributes, List<MethodDetection> methods) {
+            this(ref, name, abstractClass, attributes, methods, null);
+        }
+    }
+    public record PositionDetection(Double x, Double y) {}
     public record AttributeDetection(String name, String type, String visibility,
                                      @JsonProperty("static") Boolean staticAttribute,
                                      @JsonProperty("final") Boolean finalAttribute, String defaultValue,

@@ -5,6 +5,7 @@
 .env
 .env.*
 !.env.example
+!n8n/.env.sandbox.example
 
 *.pem
 *.key

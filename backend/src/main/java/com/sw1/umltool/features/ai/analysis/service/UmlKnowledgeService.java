@@ -53,11 +53,11 @@ public class UmlKnowledgeService {
     public String conversationalGuidance() {
         return "REGLAS PARA RESPONDER SOBRE UML:\n" +
                 "- Separa hechos comprobados, sugerencias opcionales y preguntas de negocio.\n" +
-                "- Prioriza como maximo 3 sugerencias; si no hay mejora verificable, indica que no hay hallazgos claros.\n" +
+                "- Puedes ofrecer varias sugerencias distintas, priorizadas por impacto y agrupadas por tema; evita repetirlas y no inventes problemas para llenar una lista.\n" +
                 "- No inventes atributos, operaciones, relaciones ni multiplicidades. Una clase sin atributos u operaciones no implica que falte algo.\n" +
                 "- No propongas metodos solo porque no existan ni cambies multiplicidades que ya sean validas.\n" +
                 "- Sugiere agregacion o composicion solo con evidencia de pertenencia o ciclo de vida.\n" +
-                "- Si falta una regla de negocio, usa lenguaje condicional y formula una pregunta breve. Responde en espanol y con concision.\n";
+                "- Aplica UML 2.5.1 a clases, propiedades, operaciones, parámetros, asociaciones, multiplicidades, generalización, dependencias, agregación, composición y clases de asociación. Distingue error de modelado de decisión de dominio.\n- Si falta una regla de negocio, formula preguntas concretas sobre el contexto antes de recomendar cambios. Acepta respuestas extensas cuando el usuario pida revisión completa, agrupa hallazgos y explica evidencia, impacto y alternativa.\n";
     }
 
     private Set<String> selectTopics(UmlDiagram diagram, boolean namingConventionRequested) {

@@ -8,6 +8,7 @@ import { authGuard } from './features/auth/guards/auth.guard';
 import { AccountPageComponent } from './features/auth/pages/account/account-page.component';
 import { ProjectDetailPageComponent } from './features/projects/pages/project-detail/project-detail-page.component';
 import { ProjectsPageComponent } from './features/projects/pages/projects/projects-page.component';
+import { ImportDiagramPageComponent } from './features/projects/pages/import-diagram/import-diagram-page.component';
 import { SharedPageComponent } from './features/shared/pages/shared/shared-page.component';
 import { TemplatesPageComponent } from './features/templates/pages/templates/templates-page.component';
 import { SharedLinkPageComponent } from './features/shared/pages/shared-link/shared-link-page.component';
@@ -23,6 +24,7 @@ export const routes: Routes = [
     children: [
       { path: 'dashboard', component: ProjectsPageComponent },
       { path: 'projects', component: ProjectsPageComponent, canActivate: [authGuard] },
+      { path: 'import', component: ImportDiagramPageComponent, canActivate: [authGuard] },
       { path: 'projects/:id', component: ProjectDetailPageComponent, canActivate: [authGuard] },
       { path: 'editor/:diagramId', component: EditorPageComponent, canActivate: [authGuard] },
       { path: 'settings/appearance', component: AppearancePageComponent },

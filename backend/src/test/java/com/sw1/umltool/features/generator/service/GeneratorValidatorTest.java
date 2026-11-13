@@ -27,4 +27,13 @@ class GeneratorValidatorTest {
 
         assertTrue(validator.validate(diagram).stream().anyMatch(error -> error.contains("no válido")));
     }
+
+    @Test
+    void rejectsDistinctClassNamesThatProduceTheSameJavaIdentifier() {
+        UmlDiagram diagram = UmlDiagram.builder().id("d1").name("Test")
+                .classes(List.of(UmlClass.builder().id("c1").name("Mi Clase").build(),
+                        UmlClass.builder().id("c2").name("MiClase").build())).build();
+
+        assertTrue(validator.validate(diagram).stream().anyMatch(error -> error.contains("colisionan al generar Java")));
+    }
 }

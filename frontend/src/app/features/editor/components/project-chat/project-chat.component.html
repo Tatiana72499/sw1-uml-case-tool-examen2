@@ -43,7 +43,7 @@
       @if (showDayDivider($index)) { <div class="chat-day-divider"><span>{{ message.createdAt | date:'longDate' }}</span></div> }
       <article class="chat-message" [class.chat-message-own]="isOwnMessage(message)" [class.chat-message-other]="!isOwnMessage(message)" [class.chat-message-grouped]="!messageGroupStarts($index)" [class.ai-message]="message.authorType === 'AI'">
         @if (messageGroupStarts($index)) { <div class="chat-message-meta"><span class="chat-author"><span class="chat-avatar" aria-hidden="true">{{ messageInitials(message) }}</span><strong>{{ message.authorName }}</strong></span><time>{{ message.createdAt | date:'HH:mm' }}</time></div> }
-        <div class="chat-message-content" [innerHTML]="renderMessage(message.content)"></div>
+        <div class="chat-message-content" [innerHTML]="renderMessage(message.content)"></div>@if (message.authorType === 'AI') { <button type="button" class="chat-speak-button" (click)="toggleSpeech(message)" aria-label="Leer respuesta de IA en voz alta" title="Leer en voz alta">🔊 Leer</button> }
       </article>
     } @empty { @if (!loading()) { <div class="chat-state">Aún no hay mensajes.</div> } }
   </div>
@@ -52,6 +52,8 @@
   <form class="chat-composer" (ngSubmit)="send()">
     <label for="project-chat-message">Mensaje</label>
     <div class="chat-composer-input"><textarea id="project-chat-message" name="message" [(ngModel)]="draft" maxlength="4000" rows="3" placeholder="Escribe un mensaje..." (keydown)="onComposerKeydown($event)" aria-describedby="project-chat-hint"></textarea><button type="button" class="chat-voice-button" [class.listening]="voiceListening()" [attr.aria-pressed]="voiceListening()" [attr.aria-label]="voiceListening() ? 'Detener dictado' : 'Dictar mensaje'" [title]="voiceListening() ? 'Detener dictado' : 'Dictar mensaje'" (click)="toggleVoiceRecognition()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm6-3a6 6 0 0 1-12 0m6 6v4m-3 0h6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" /></svg></button></div>
+    <label class="chat-camera-button" [class.disabled]="imageImporting()" title="Importar diagrama desde imagen"><input type="file" accept="image/png,image/jpeg,image/webp" capture="environment" (change)="importDiagramImage($event)" [disabled]="imageImporting()" /><span aria-hidden="true">📷</span><span>{{ imageImporting() ? 'Procesando imagen…' : 'Desde imagen' }}</span></label>
+    @if (imageError()) { <small class="chat-voice-status" role="status">{{ imageError() }}</small> }
     @if (voiceListening()) { <small class="chat-voice-status" role="status">Escuchando...</small> }
     <small id="project-chat-hint" class="chat-composer-hint">Enter para enviar · Shift+Enter para una nueva línea</small>
     <div class="chat-composer-footer"><small>{{ draft.length }}/4000</small><button class="btn btn-primary" type="submit" [disabled]="!draft.trim() || sending() || loading()">{{ sending() ? 'Enviando...' : 'Enviar' }}</button></div>

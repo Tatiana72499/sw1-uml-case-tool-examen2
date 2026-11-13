@@ -24,11 +24,16 @@ public class GeneratorValidator {
         result.getErrors().forEach(error -> errors.add(error.getMessage()));
         if (diagram == null) return errors;
         Set<String> names = new HashSet<>();
+        Set<String> generatedNames = new HashSet<>();
         for (UmlClass umlClass : diagram.getClasses()) {
             if (umlClass == null || blank(umlClass.getName())) continue;
             if (!names.add(umlClass.getName().toLowerCase())) errors.add("Clases duplicadas: " + umlClass.getName());
+            String generatedName = IdentifierSanitizer.pascal(umlClass.getName());
+            if (!generatedNames.add(generatedName.toLowerCase(java.util.Locale.ROOT))) {
+                errors.add("Los nombres de clase colisionan al generar Java: " + umlClass.getName());
+            }
             if (JAVA_KEYWORDS.contains(umlClass.getName().toLowerCase())) errors.add("Nombre de clase no válido para Java: " + umlClass.getName());
-            if (!validIdentifier(IdentifierSanitizer.pascal(umlClass.getName()))) errors.add("Nombre de clase no válido para Java: " + umlClass.getName());
+            if (!validIdentifier(generatedName)) errors.add("Nombre de clase no válido para Java: " + umlClass.getName());
             Set<String> attributes = new HashSet<>();
             for (UmlAttribute attribute : umlClass.getAttributes()) {
                 if (attribute != null && !blank(attribute.getName()) && !attributes.add(attribute.getName().toLowerCase())) errors.add("Atributos duplicados en " + umlClass.getName() + ": " + attribute.getName());

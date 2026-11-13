@@ -397,8 +397,34 @@ h3 {
 .relation-label {
   fill: var(--color-text-muted);
   font-size: 11px;
-  pointer-events: none;
+  pointer-events: auto;
 }
+.relation-label.editable {
+  cursor: pointer;
+  text-decoration: underline dotted transparent;
+  text-underline-offset: 2px;
+}
+.relation-label.editable:hover,
+.relation-label.editable:focus {
+  fill: var(--color-primary);
+  text-decoration-color: currentColor;
+  outline: none;
+}
+
+.inline-multiplicity-editor {
+  position: absolute;
+  z-index: 20;
+  display: grid;
+  gap: 8px;
+  width: 230px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md, 0 8px 24px #20154b2e);
+}
+.inline-multiplicity-editor label { display: grid; gap: 5px; color: var(--color-text-muted); }
+.inline-multiplicity-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
 .relation-line marker path {
   fill: var(--color-primary);

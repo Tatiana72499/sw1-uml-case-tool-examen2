@@ -1,3 +1,4 @@
+import { provideHttpClient } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { of, Subject } from 'rxjs';
 import { signal } from '@angular/core';
@@ -45,7 +46,7 @@ describe('ProjectChatComponent', () => {
     };
     await TestBed.configureTestingModule({
       imports: [ProjectChatComponent],
-      providers: [
+      providers: [provideHttpClient(),
         { provide: AiChatService, useValue: chat },
         { provide: CollaborationService, useValue: collaboration },
         { provide: AuthService, useValue: { currentUser: signal({ id: 'user-1', firstName: 'Ana', lastName: 'Test', email: '', theme: '' }) } },
@@ -79,7 +80,7 @@ describe('ProjectChatComponent', () => {
     const chat = { getConversation: vi.fn(() => of({ id: 'c1', projectId: 'p1', type: 'GROUP' as const })), getMessages: vi.fn(() => of({ messages: [], nextCursor: null })), listMemories: vi.fn(() => of([])), sendMessage: vi.fn() };
     await TestBed.configureTestingModule({
       imports: [ProjectChatComponent],
-      providers: [
+      providers: [provideHttpClient(),
         { provide: AiChatService, useValue: chat },
         { provide: CollaborationService, useValue: collaboration },
         { provide: AuthService, useValue: { currentUser: signal(null) } },
@@ -116,7 +117,7 @@ describe('ProjectChatComponent', () => {
     };
     await TestBed.configureTestingModule({
       imports: [ProjectChatComponent],
-      providers: [
+      providers: [provideHttpClient(),
         { provide: AiChatService, useValue: chat },
         { provide: CollaborationService, useValue: collaboration },
         { provide: AuthService, useValue: { currentUser: signal(null) } },
@@ -145,7 +146,7 @@ describe('ProjectChatComponent', () => {
       getConversation: vi.fn(() => of({ id: 'c1', projectId: 'p1', type: 'PRIVATE' as const })),
       getMessages: vi.fn(() => of({ messages: [], nextCursor: null })), listMemories: vi.fn(() => of([])), sendMessage: vi.fn(() => response),
     };
-    await TestBed.configureTestingModule({ imports: [ProjectChatComponent], providers: [
+    await TestBed.configureTestingModule({ imports: [ProjectChatComponent], providers: [provideHttpClient(),
       { provide: AiChatService, useValue: chat }, { provide: CollaborationService, useValue: collaboration },
       { provide: AuthService, useValue: { currentUser: signal(null) } },
     ] }).compileComponents();
@@ -163,7 +164,7 @@ describe('ProjectChatComponent', () => {
       getConversation: vi.fn(() => of({ id: 'c1', projectId: 'p1', type: 'PRIVATE' as const })),
       getMessages: vi.fn(() => of({ messages: [], nextCursor: null })), listMemories: vi.fn(() => of([])), sendMessage: vi.fn(() => response),
     };
-    await TestBed.configureTestingModule({ imports: [ProjectChatComponent], providers: [
+    await TestBed.configureTestingModule({ imports: [ProjectChatComponent], providers: [provideHttpClient(),
       { provide: AiChatService, useValue: chat }, { provide: CollaborationService, useValue: collaboration },
       { provide: AuthService, useValue: { currentUser: signal(null) } },
     ] }).compileComponents();
@@ -191,7 +192,7 @@ describe('ProjectChatComponent', () => {
     };
     await TestBed.configureTestingModule({
       imports: [ProjectChatComponent],
-      providers: [
+      providers: [provideHttpClient(),
         { provide: AiChatService, useValue: chat },
         { provide: CollaborationService, useValue: collaboration },
         { provide: AuthService, useValue: { currentUser: signal(null) } },
@@ -216,7 +217,7 @@ describe('ProjectChatComponent', () => {
     const voice = { isSupported: vi.fn(() => true), listen: vi.fn(() => voiceEvents), stop: vi.fn() };
     const collaboration = { events: new Subject<CollaborationEvent>(), status: signal<'DISCONNECTED'>('DISCONNECTED'), subscribeProject: vi.fn(), unsubscribeProject: vi.fn(), sendChatMessage: vi.fn(() => null) };
     const chat = { getConversation: vi.fn(() => of({ id: 'c1', projectId: 'p1', type: 'GROUP' as const })), getMessages: vi.fn(() => of({ messages: [], nextCursor: null })), listMemories: vi.fn(() => of([])), sendMessage: vi.fn() };
-    await TestBed.configureTestingModule({ imports: [ProjectChatComponent], providers: [
+    await TestBed.configureTestingModule({ imports: [ProjectChatComponent], providers: [provideHttpClient(),
       { provide: AiChatService, useValue: chat }, { provide: CollaborationService, useValue: collaboration },
       { provide: AuthService, useValue: { currentUser: signal(null) } }, { provide: VoiceRecognitionService, useValue: voice },
     ] }).compileComponents();
@@ -237,7 +238,7 @@ describe('ProjectChatComponent', () => {
     const voice = { isSupported: vi.fn(() => true), listen: vi.fn(() => voiceEvents), stop: vi.fn() };
     const collaboration = { events: new Subject<CollaborationEvent>(), status: signal<'DISCONNECTED'>('DISCONNECTED'), subscribeProject: vi.fn(), unsubscribeProject: vi.fn(), sendChatMessage: vi.fn(() => null) };
     const chat = { getConversation: vi.fn(() => of({ id: 'c1', projectId: 'p1', type: 'GROUP' as const })), getMessages: vi.fn(() => of({ messages: [], nextCursor: null })), listMemories: vi.fn(() => of([])), sendMessage: vi.fn() };
-    await TestBed.configureTestingModule({ imports: [ProjectChatComponent], providers: [
+    await TestBed.configureTestingModule({ imports: [ProjectChatComponent], providers: [provideHttpClient(),
       { provide: AiChatService, useValue: chat }, { provide: CollaborationService, useValue: collaboration },
       { provide: AuthService, useValue: { currentUser: signal(null) } }, { provide: VoiceRecognitionService, useValue: voice },
     ] }).compileComponents();

@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -84,7 +85,18 @@ public class GeneratorService {
         StringBuilder out = new StringBuilder("package ").append(base).append(".entity;\n\n");
         out.append("import jakarta.persistence.*;\nimport com.fasterxml.jackson.annotation.JsonIgnore;\nimport java.time.*;\nimport java.math.BigDecimal;\nimport java.util.*;\n\n");
         out.append("@Entity\n");
-        if (acRelations.containsKey(umlClass.getId())) {
+        UmlRelation generatedBridgeRelation = generatedBridgeRelation(umlClass, diagram);
+        if (generatedBridgeRelation != null) {
+            UmlClass source = classes.get(generatedBridgeRelation.getSourceClassId());
+            UmlClass target = classes.get(generatedBridgeRelation.getTargetClassId());
+            if (source != null && target != null) {
+                String sourceField = bridgeEndpointField(generatedBridgeRelation, true, source);
+                String targetField = bridgeEndpointField(generatedBridgeRelation, false, target);
+                out.append("@Table(name=\"").append(sqlName(name)).append("\", uniqueConstraints = @UniqueConstraint(columnNames = {\"")
+                        .append(sqlName(sourceField)).append("_id\", \"")
+                        .append(sqlName(targetField)).append("_id\"}))\n");
+            } else out.append("@Table(name=\"").append(sqlName(name)).append("\")\n");
+        } else if (acRelations.containsKey(umlClass.getId())) {
             UmlRelation association = acRelations.get(umlClass.getId());
             UmlClass source = classes.get(association.getSourceClassId());
             UmlClass target = classes.get(association.getTargetClassId());
@@ -120,11 +132,12 @@ public class GeneratorService {
         if (linkedAssociation != null) {
             addAssociationClassEnd(out, fields, classes, linkedAssociation.getSourceClassId());
             addAssociationClassEnd(out, fields, classes, linkedAssociation.getTargetClassId());
-        } else if (umlClass.getId() != null && umlClass.getId().startsWith("bridge-")) {
-            UmlRelation bridgeRelation = diagram.getRelations().stream().filter(r -> ("bridge-" + r.getId()).equals(umlClass.getId())).findFirst().orElse(null);
-            if (bridgeRelation != null) {
-                addAssociationClassEnd(out, fields, classes, bridgeRelation.getSourceClassId());
-                addAssociationClassEnd(out, fields, classes, bridgeRelation.getTargetClassId());
+        } else if (generatedBridgeRelation != null) {
+            UmlClass source = classes.get(generatedBridgeRelation.getSourceClassId());
+            UmlClass target = classes.get(generatedBridgeRelation.getTargetClassId());
+            if (source != null && target != null) {
+                addBridgeEnd(out, fields, generatedBridgeRelation, true, source);
+                addBridgeEnd(out, fields, generatedBridgeRelation, false, target);
             }
         }
         appendJavaBeanAccessors(out);
@@ -303,6 +316,9 @@ public class GeneratorService {
             if (other == null) continue;
             boolean sourceMany = many(relation.getSourceMultiplicity());
             boolean targetMany = many(relation.getTargetMultiplicity());
+            // N:M is represented only by its generated bridge entity; endpoint
+            // DTOs/services must not reference collections that aren't mapped.
+            if (sourceMany && targetMany) continue;
             if (Objects.equals(relation.getSourceClassId(), relation.getTargetClassId())) {
                 addRecursiveRelationSpecs(result, relation, other, classes, diagram, requestOnly);
                 continue;
@@ -643,13 +659,12 @@ public class GeneratorService {
                 fields.add(runtimeRelationField(spec));
             }
         } else {
-            UmlRelation relation = diagram.getRelations().stream()
-                    .filter(r -> ("bridge-" + r.getId()).equals(item.getId())).findFirst().orElse(null);
+            UmlRelation relation = generatedBridgeRelation(item, diagram);
             if (relation != null) {
                 UmlClass source = classes.get(relation.getSourceClassId());
                 UmlClass target = classes.get(relation.getTargetClassId());
-                if (source != null) fields.add(runtimeRelationField(javaField(source.getName()), source, true, true));
-                if (target != null) fields.add(runtimeRelationField(javaField(target.getName()), target, true, true));
+                if (source != null) fields.add(runtimeRelationField(bridgeEndpointField(relation, true, source) + "Id", source, true, true));
+                if (target != null) fields.add(runtimeRelationField(bridgeEndpointField(relation, false, target) + "Id", target, true, true));
             }
         }
         return fields;
@@ -765,7 +780,64 @@ public class GeneratorService {
     }
 
     private Map<String, UmlRelation> associationClassRelations(UmlDiagram diagram) { Map<String, UmlRelation> result = new HashMap<>(); if (diagram.getAssociationClassLinks() != null) for (AssociationClassLink link : diagram.getAssociationClassLinks()) diagram.getRelations().stream().filter(r -> Objects.equals(r.getId(), link.getRelationId())).findFirst().ifPresent(r -> result.put(link.getClassId(), r)); return result; }
-    private List<UmlClass> bridgeClasses(UmlDiagram diagram, Map<String, UmlClass> classes, Map<String, UmlRelation> ac) { List<UmlClass> result = new ArrayList<>(); for (UmlRelation r : diagram.getRelations()) if (r.getType() != RelationType.DEPENDENCY && many(r.getSourceMultiplicity()) && many(r.getTargetMultiplicity()) && ac.values().stream().noneMatch(r::equals)) result.add(UmlClass.builder().id("bridge-" + r.getId()).name(javaName(classes.get(r.getSourceClassId()).getName()) + javaName(classes.get(r.getTargetClassId()).getName())).build()); return result; }
+    private List<UmlClass> bridgeClasses(UmlDiagram diagram, Map<String, UmlClass> classes, Map<String, UmlRelation> associationClasses) {
+        List<UmlClass> result = new ArrayList<>();
+        Set<String> usedNames = classes.values().stream().filter(Objects::nonNull).map(UmlClass::getName)
+                .filter(Objects::nonNull).map(this::javaName).map(value -> value.toLowerCase(Locale.ROOT))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        for (UmlRelation relation : diagram.getRelations()) {
+            if (!supportsBridge(relation) || !many(relation.getSourceMultiplicity()) || !many(relation.getTargetMultiplicity())
+                    || associationClasses.values().stream().anyMatch(relation::equals)) continue;
+            UmlClass source = classes.get(relation.getSourceClassId());
+            UmlClass target = classes.get(relation.getTargetClassId());
+            if (source == null || target == null) continue;
+            String baseName = javaName(source.getName()) + javaName(target.getName());
+            String bridgeName = baseName;
+            if (!usedNames.add(bridgeName.toLowerCase(Locale.ROOT))) {
+                String relationSuffix = javaName(relation.getId());
+                bridgeName = baseName + "Link" + relationSuffix;
+                int sequence = 2;
+                while (!usedNames.add(bridgeName.toLowerCase(Locale.ROOT))) bridgeName = baseName + "Link" + relationSuffix + sequence++;
+            }
+            result.add(UmlClass.builder().id("bridge-" + relation.getId()).name(bridgeName).build());
+        }
+        return result;
+    }
+
+    private boolean supportsBridge(UmlRelation relation) {
+        return relation != null && (relation.getType() == RelationType.ASSOCIATION
+                || relation.getType() == RelationType.AGGREGATION);
+    }
+
+    private UmlRelation generatedBridgeRelation(UmlClass bridge, UmlDiagram diagram) {
+        if (bridge == null || bridge.getId() == null || !bridge.getId().startsWith("bridge-")) return null;
+        return diagram.getRelations().stream().filter(relation -> supportsBridge(relation)
+                && ("bridge-" + relation.getId()).equals(bridge.getId())
+                && many(relation.getSourceMultiplicity()) && many(relation.getTargetMultiplicity())
+                && (diagram.getAssociationClassLinks() == null || diagram.getAssociationClassLinks().stream()
+                        .noneMatch(link -> Objects.equals(link.getRelationId(), relation.getId()))))
+                .findFirst().orElse(null);
+    }
+
+    private String bridgeEndpointField(UmlRelation relation, boolean sourceEnd, UmlClass endpoint) {
+        String role = sourceEnd ? relation.getSourceRole() : relation.getTargetRole();
+        String field = javaField(role == null || role.isBlank() ? endpoint.getName() : role);
+        if (Objects.equals(relation.getSourceClassId(), relation.getTargetClassId())) {
+            String otherRole = sourceEnd ? relation.getTargetRole() : relation.getSourceRole();
+            String otherField = javaField(otherRole == null || otherRole.isBlank() ? endpoint.getName() : otherRole);
+            if (field.equalsIgnoreCase(otherField)) field = (sourceEnd ? "source" : "target") + cap(field);
+        }
+        return field;
+    }
+
+    private void addBridgeEnd(StringBuilder out, Set<String> fields, UmlRelation relation, boolean sourceEnd,
+            UmlClass endpoint) {
+        String type = javaName(endpoint.getName());
+        String field = bridgeEndpointField(relation, sourceEnd, endpoint);
+        if (!fields.add(field)) return;
+        out.append("    @ManyToOne(optional = false)\n    @JoinColumn(name=\"").append(sqlName(field))
+                .append("_id\", nullable = false)\n    private ").append(type).append(' ').append(field).append(";\n\n");
+    }
     private String inheritanceParent(UmlClass child, UmlDiagram diagram, Map<String, UmlClass> classes) { return diagram.getRelations().stream().filter(r -> r.getType() == RelationType.INHERITANCE && child.getId().equals(r.getSourceClassId())).map(r -> classes.get(r.getTargetClassId())).filter(Objects::nonNull).map(c -> javaName(c.getName())).findFirst().orElse(null); }
     private String idType(UmlClass c, Map<String, UmlClass> classes, UmlDiagram diagram) {
         Set<String> visited = new HashSet<>();

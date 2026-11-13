@@ -55,4 +55,14 @@ describe('ProjectService', () => {
     expect(request.request.body).toEqual({});
     request.flush({ id: 'copy-1', name: 'Demo - Copia' });
   });
+
+  it('notifies the sidebar count after a project is successfully created', () => {
+    let notifications = 0;
+    service.projectChanges$.subscribe(() => notifications++);
+    service.createProject({ name: 'Nuevo', ownerUserId: 'owner-1' }).subscribe();
+    const request = http.expectOne(`${API_BASE_URL}/projects`);
+    expect(notifications).toBe(0);
+    request.flush({ id: 'new-project', name: 'Nuevo', ownerUserId: 'owner-1' });
+    expect(notifications).toBe(1);
+  });
 });

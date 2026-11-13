@@ -22,7 +22,7 @@ import {
   AssociationClassLink,
 } from '../../models/diagram.model';
 import { DiagramOperationService } from '../../services/diagram-operation.service';
-import { normalizeClassName } from '../../utils/class-name.util';
+import { normalizeClassName, normalizeGeneratedClassName } from '../../utils/class-name.util';
 import { CollaborationService } from '../../services/collaboration.service';
 import { DiagramService } from '../../services/diagram.service';
 import { XmiImportService } from '../../services/xmi-import.service';
@@ -305,9 +305,12 @@ export class EditorPageComponent implements OnDestroy {
     && this.selectedChangeProposalsAreValid(),
   );
   readonly toolbarOpen = signal(false);
+  readonly toolbarHidden = signal(false);
   readonly inspectorOpen = signal(false);
+  readonly inspectorHidden = signal(false);
   readonly pendingRelationDeletion = signal<UmlRelation | null>(null);
   readonly relationMultiplicityDraft = signal<RelationMultiplicityDraft | null>(null);
+  readonly inlineMultiplicityEditor = signal<{ relationId: string; side: 'source' | 'target'; x: number; y: number } | null>(null);
   readonly relationRolesDraft = signal<RelationRolesDraft | null>(null);
   readonly relationNavigabilityDraft = signal({ source: false, target: false });
   readonly relationPropertySaving = signal(false);
@@ -318,7 +321,10 @@ export class EditorPageComponent implements OnDestroy {
   readonly renaming = signal(false);
   readonly renameError = signal('');
   readonly dragState = signal<DragState | null>(null);
+  readonly remoteClassPositionPreviews = signal<Record<string, { x: number; y: number; receivedAt: number }>>({});
   readonly moving = signal(false);
+  private pendingClassMove: { moveId: string; classId: string; initialX: number; initialY: number } | null = null;
+  private abstractConflictRetrying = false;
   readonly resizeState = signal<ResizeState | null>(null);
   readonly resizing = signal(false);
   readonly zoom = signal(1);
@@ -414,6 +420,9 @@ export class EditorPageComponent implements OnDestroy {
     return umlClass?.methods.find((method) => method.id === methodId) ?? null;
   });
   readonly attributeDraft = signal<AttributeDraft | null>(null);
+  readonly inlineAddingAttributeClassId = signal<string | null>(null);
+  readonly inlineAddingMethodClassId = signal<string | null>(null);
+  readonly inlineAppearanceClassId = signal<string | null>(null);
   readonly editingAttributeId = signal<string | null>(null);
   readonly attributeSaving = signal(false);
   readonly attributeError = signal('');
@@ -513,6 +522,41 @@ export class EditorPageComponent implements OnDestroy {
         this.replaceDiagram(diagram);
         this.collaboration?.connect(diagram.id, diagram.version);
         this.collaborationSubscription = this.collaboration?.events.subscribe((event) => {
+          if (event.type === 'DIAGRAM_LAYOUT_SYNC' && event.viewState) {
+            const current = this.diagram();
+            if (current) this.replaceDiagram({ ...current, viewState: event.viewState });
+          }
+          if (event.type === 'CLASS_POSITION_PREVIEW' && event.classId && Number.isFinite(event.x) && Number.isFinite(event.y)) {
+            const previewAt = Date.now();
+            this.remoteClassPositionPreviews.update((positions) => ({
+              ...positions,
+              [event.classId!]: { x: event.x!, y: event.y!, receivedAt: previewAt },
+            }));
+            setTimeout(() => {
+              if (this.remoteClassPositionPreviews()[event.classId!]?.receivedAt === previewAt) {
+                this.clearRemoteClassPositionPreview(event.classId!);
+              }
+            }, 10_000);
+          }
+          if (event.type === 'CLASS_POSITION_SAVED' && event.classId && Number.isFinite(event.x) && Number.isFinite(event.y)) {
+            this.clearRemoteClassPositionPreview(event.classId);
+            this.applyClassPositionToViewState(event.classId, event.x!, event.y!);
+            if (event.moveId && this.pendingClassMove?.moveId === event.moveId) {
+              this.pendingClassMove = null;
+              this.moving.set(false);
+              this.error.set('');
+            }
+          }
+          if (event.type === 'CLASS_POSITION_REJECTED' && event.classId) {
+            this.clearRemoteClassPositionPreview(event.classId);
+            if (event.moveId && this.pendingClassMove?.moveId === event.moveId) {
+              const failedMove = this.pendingClassMove;
+              this.pendingClassMove = null;
+              this.applyClassPositionToViewState(failedMove.classId, failedMove.initialX, failedMove.initialY);
+              this.moving.set(false);
+              this.error.set(event.errorMessage || 'No se pudo guardar la posición de la clase.');
+            }
+          }
           if (event.type === 'OPERATION_APPLIED' && event.result && event.result.operationId !== undefined) {
             const current = this.diagram();
             if (!current || event.result.operationId === this.lastLocalOperationId) return;
@@ -525,7 +569,7 @@ export class EditorPageComponent implements OnDestroy {
             this.applyOperationResponse(event.result);
           }
           if (event.type === 'RESYNC_REQUIRED') this.diagramService.getDiagramById(this.diagramId).subscribe((current) => { this.replaceDiagram(current); this.collaboration?.markResynced(current.version); });
-          if (event.type === 'OPERATION_REJECTED' && event.reason === 'VERSION_CONFLICT') this.diagramService.getDiagramById(this.diagramId).subscribe((current) => { this.replaceDiagram(current); this.collaboration?.markResynced(current.version); });
+          if (event.type === 'OPERATION_REJECTED' && event.reason === 'VERSION_CONFLICT' && !this.abstractConflictRetrying) this.diagramService.getDiagramById(this.diagramId).subscribe((current) => { this.replaceDiagram(current); this.collaboration?.markResynced(current.version); });
           if (event.type === 'DIAGRAM_SNAPSHOT_UPDATED' && event.canonicalModel && event.viewState) {
             const current = this.diagram();
             const snapshotVersion = event.version ?? event.canonicalModel.version;
@@ -1102,7 +1146,8 @@ export class EditorPageComponent implements OnDestroy {
   suggestionCategoryLabel(category: string): string {
     const labels: Record<string, string> = {
       ATTRIBUTE: 'Atributos', GENERAL: 'General', RELATIONSHIP: 'Relaciones',
-      OPERATION: 'Operaciones', NAMING: 'Nombres',
+      OPERATION: 'Operaciones', NAMING: 'Nombres', MULTIPLICITY: 'Multiplicidades',
+      INHERITANCE: 'Herencia', CONSISTENCY: 'Consistencia',
     };
     return labels[category] ?? category.replace(/_/g, ' ').toLowerCase();
   }
@@ -1203,6 +1248,9 @@ export class EditorPageComponent implements OnDestroy {
   toggleInspector(): void {
     this.inspectorOpen.update((value) => !value);
   }
+
+  toggleToolbarVisibility(): void { this.toolbarHidden.update((value) => !value); }
+  toggleInspectorVisibility(): void { this.inspectorHidden.update((value) => !value); }
 
   openGeneratorDialog(): void {
     this.closeTransientMenus();
@@ -1787,6 +1835,22 @@ export class EditorPageComponent implements OnDestroy {
       });
   }
 
+  toggleInlineAppearance(classId: string, event: Event): void {
+    event.stopPropagation();
+    this.selectedClassId.set(classId);
+    this.inlineAppearanceClassId.update((current) => current === classId ? null : current);
+  }
+
+  changeInlineClassStyle(classId: string, field: 'headerColor' | 'bodyColor' | 'borderColor', event: Event): void {
+    this.selectedClassId.set(classId);
+    this.changeClassStyle(field, event);
+  }
+
+  resetInlineClassStyle(classId: string, event: Event): void {
+    event.stopPropagation();
+    this.selectedClassId.set(classId);
+    this.resetClassStyle();
+  }
   changeClassStyle(
     field: 'headerColor' | 'bodyColor' | 'borderColor',
     event: Event,
@@ -1906,6 +1970,40 @@ export class EditorPageComponent implements OnDestroy {
     this.syncRelationDrafts(relation);
   }
 
+  openInlineMultiplicityEditor(relation: UmlRelation, side: 'source' | 'target', x: number, y: number, event: Event): void {
+    event.stopPropagation();
+    this.selectRelation(relation, event as MouseEvent);
+    if (!this.usesMultiplicity(relation.type) || this.isReadOnly()) return;
+    this.inlineMultiplicityEditor.set({ relationId: relation.id, side, x, y });
+  }
+
+  closeInlineMultiplicityEditor(event?: Event): void {
+    event?.stopPropagation();
+    this.inlineMultiplicityEditor.set(null);
+  }
+
+  saveInlineMultiplicityEditor(event: Event): void {
+    event.stopPropagation();
+    const inline = this.inlineMultiplicityEditor();
+    if (!inline || this.relationPropertySaving()) return;
+    const relation = this.diagram()?.canonicalModel.relations.find((item) => item.id === inline.relationId);
+    if (!relation) { this.closeInlineMultiplicityEditor(); return; }
+    const draft = this.relationMultiplicityDraft();
+    if (!draft) return;
+    if (this.sameMultiplicity(relation.sourceMultiplicity, draft.source)
+      && this.sameMultiplicity(relation.targetMultiplicity, draft.target)) {
+      this.closeInlineMultiplicityEditor();
+      return;
+    }
+    this.saveRelationMultiplicity();
+  }
+
+  onRelationLabelKeydown(relation: UmlRelation, side: 'source' | 'target', x: number, y: number, event: KeyboardEvent): void {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    this.openInlineMultiplicityEditor(relation, side, x, y, event);
+  }
+
   changeSelectedRelationType(type: RelationType): void {
     if (this.isReadOnly()) return;
     const relation = this.selectedRelation()?.relation;
@@ -1922,17 +2020,29 @@ export class EditorPageComponent implements OnDestroy {
   }
 
   usesMultiplicity(type: string): boolean {
-    return type === 'ASSOCIATION' || type === 'AGGREGATION' || type === 'COMPOSITION';
+    return type === 'ASSOCIATION';
+  }
+
+  isManyToMany(relation: UmlRelation): boolean {
+    return relation.type === 'ASSOCIATION'
+      && relation.sourceMultiplicity?.upper === '*'
+      && relation.targetMultiplicity?.upper === '*';
   }
 
   usesRoles(type: string): boolean {
-    return this.usesMultiplicity(type);
+    return type === 'ASSOCIATION' || type === 'AGGREGATION' || type === 'COMPOSITION';
   }
 
   createAssociationClass(): void {
-    const currentDiagram = this.diagram();
     const relation = this.selectedRelation()?.relation;
-    if (!currentDiagram || !relation || relation.type !== 'ASSOCIATION' || this.associationClassSaving()) return;
+    if (!relation) return;
+    this.createAssociationClassForRelation(relation);
+  }
+
+  private createAssociationClassForRelation(relation: UmlRelation): void {
+    const currentDiagram = this.diagram();
+    if (!currentDiagram || relation.type !== 'ASSOCIATION' || this.associationClassSaving()
+      || (currentDiagram.canonicalModel.associationClassLinks ?? []).some(link => link.relationId === relation.id)) return;
     const midpoint = this.relationMidpoint(relation, this.renderedClasses());
     const classId = crypto.randomUUID();
     const linkId = crypto.randomUUID();
@@ -1949,7 +2059,9 @@ export class EditorPageComponent implements OnDestroy {
           linkId,
           relationId: relation.id,
           classId,
-          name: this.nextAssociationClassName(currentDiagram),
+          name: this.isManyToMany(relation)
+            ? this.nextIntermediateClassName(currentDiagram)
+            : this.nextAssociationClassName(currentDiagram),
           isAbstract: false,
           x: Math.max(0, midpoint.x - 120),
           y: Math.max(0, midpoint.y + 50),
@@ -2039,6 +2151,13 @@ export class EditorPageComponent implements OnDestroy {
     this.relationNavigabilityDraft.update((draft) => ({ ...draft, [side]: value }));
   }
 
+  setManyToManyDraft(): void {
+    const relation = this.selectedRelation()?.relation;
+    if (!relation || relation.type !== 'ASSOCIATION') return;
+    this.updateRelationMultiplicityDraft('source', '0..*');
+    this.updateRelationMultiplicityDraft('target', '0..*');
+  }
+
   saveRelationMultiplicity(): void {
     if (this.isReadOnly()) return;
     const relation = this.selectedRelation()?.relation;
@@ -2118,6 +2237,12 @@ export class EditorPageComponent implements OnDestroy {
     });
   }
 
+  isStandardMultiplicity(multiplicity: Multiplicity | null | undefined): boolean {
+    if (!multiplicity) return true;
+    const value = String(multiplicity.lower) + '|' + String(multiplicity.upper);
+    return ['1|1', '0|1', '0|*', '1|*'].includes(value);
+  }
+
   private parseMultiplicity(value: string): Multiplicity {
     const normalized = value.trim() || '1';
     const parts = normalized.split('..', 2);
@@ -2155,6 +2280,11 @@ export class EditorPageComponent implements OnDestroy {
           );
           if (updated) this.syncRelationDrafts(updated);
           this.relationPropertySaving.set(false);
+          if (this.inlineMultiplicityEditor()?.relationId === operation.payload.relationId) this.closeInlineMultiplicityEditor();
+          if (updated && operation.type === 'CHANGE_MULTIPLICITY' && this.isManyToMany(updated)
+            && !(response.canonicalModel.associationClassLinks ?? []).some(link => link.relationId === updated.id)) {
+            this.createAssociationClassForRelation(updated);
+          }
         },
         error: (error: unknown) => {
           this.relationPropertySaving.set(false);
@@ -2270,7 +2400,7 @@ export class EditorPageComponent implements OnDestroy {
 
   onClassPointerDown(umlClass: UmlClass, event: PointerEvent): void {
     event.stopPropagation();
-    if ((event.target as HTMLElement | null)?.closest('.inline-edit-trigger')) return;
+    if ((event.target as HTMLElement | null)?.closest('.inline-member-editor, input, select, textarea, button, [contenteditable="true"]')) return;
     const canvas = (event.currentTarget as HTMLElement).closest('.canvas') as HTMLElement | null;
     if (canvas && this.shouldStartPan(event)) {
       this.startPan(event, canvas);
@@ -2301,6 +2431,44 @@ export class EditorPageComponent implements OnDestroy {
     state.captureElement.setPointerCapture?.(event.pointerId);
   }
 
+  setClassAbstract(umlClass: UmlClass, isAbstract: boolean, event: Event): void {
+    event.stopPropagation();
+    if (this.isReadOnly()) return;
+    const currentDiagram = this.diagram();
+    if (!currentDiagram || this.isAbstract(umlClass) === isAbstract) return;
+    const execute = (baseVersion: number, retried: boolean): void => {
+      this.abstractConflictRetrying = !retried;
+      this.operationService.execute(this.diagramId, { operation: {
+        operationId: crypto.randomUUID(), diagramId: this.diagramId, userId: DEV_USER_ID,
+        baseVersion, type: 'SET_CLASS_ABSTRACT', payload: { classId: umlClass.id, isAbstract },
+      } }).subscribe({
+        next: response => { this.abstractConflictRetrying = false; this.applyOperationResponse(response); this.error.set(''); },
+        error: error => {
+          if (!retried && this.isVersionConflict(error)) {
+            this.diagramService.getDiagramById(this.diagramId).subscribe({
+              next: latest => {
+                this.replaceDiagram(latest);
+                this.collaboration?.markResynced(latest.version);
+                const refreshedClass = latest.canonicalModel.classes.find(item => item.id === umlClass.id);
+                if (!refreshedClass || this.isAbstract(refreshedClass) === isAbstract) {
+                  this.abstractConflictRetrying = false;
+                  this.error.set(refreshedClass ? '' : 'La clase ya no existe en la versión actualizada.');
+                  return;
+                }
+                this.abstractConflictRetrying = false;
+                execute(latest.version, true);
+              },
+              error: refreshError => { this.abstractConflictRetrying = false; this.error.set(this.operationError(refreshError, 'No se pudo sincronizar el diagrama.')); },
+            });
+            return;
+          }
+          this.abstractConflictRetrying = false;
+          this.error.set(this.operationError(error, 'No se pudo actualizar el tipo de clase.'));
+        },
+      });
+    };
+    execute(currentDiagram.version, false);
+  }
   onResizePointerDown(item: RenderedUmlClass, event: PointerEvent): void {
     event.stopPropagation();
     if (this.isReadOnly() || this.activeTool() !== 'SELECT' || this.resizing() || this.moving()) return;
@@ -2363,6 +2531,7 @@ export class EditorPageComponent implements OnDestroy {
     state.previewX = point.x - state.offsetX;
     state.previewY = point.y - state.offsetY;
     this.dragState.set({ ...state });
+    this.collaboration?.sendClassPositionPreview(state.classId, state.previewX, state.previewY);
   }
 
   onCanvasPointerUp(event: PointerEvent): void {
@@ -2396,7 +2565,7 @@ export class EditorPageComponent implements OnDestroy {
       ...state,
       isResizing:
         state.isResizing ||
-        Math.hypot(event.clientX - state.startPointerX, event.clientY - state.startPointerY) >= 4,
+        Math.hypot(event.clientX - state.startPointerX, event.clientY - state.startPointerY) >= 2.5,
       previewWidth: Math.max(180, state.initialWidth + (event.clientX - state.startPointerX) / this.zoom()),
       previewHeight: Math.max(120, state.initialHeight + (event.clientY - state.startPointerY) / this.zoom()),
     };
@@ -2463,56 +2632,50 @@ export class EditorPageComponent implements OnDestroy {
       return;
     }
     const { classId, previewX, previewY, initialX, initialY } = state;
-    this.dragState.set({ ...state });
-    if (previewX === initialX && previewY === initialY) return this.dragState.set(null);
-    const currentDiagram = this.diagram();
-    if (!currentDiagram) return this.dragState.set(null);
+    this.dragState.set(null);
+    if (previewX === initialX && previewY === initialY) return;
+    this.applyClassPositionToViewState(classId, previewX, previewY);
+    const moveId = this.collaboration?.commitClassPosition(classId, previewX, previewY);
+    if (!moveId) {
+      this.applyClassPositionToViewState(classId, initialX, initialY);
+      this.error.set('No se pudo guardar la posición: conecta el editor al WebSocket del diagrama.');
+      return;
+    }
+    this.pendingClassMove = { moveId, classId, initialX, initialY };
     this.moving.set(true);
-    this.operationService
-      .execute(this.diagramId, {
-        operation: {
-          operationId: crypto.randomUUID(),
-          diagramId: this.diagramId,
-          userId: DEV_USER_ID,
-          baseVersion: currentDiagram.version,
-          type: 'MOVE_CLASS',
-          payload: { classId, x: previewX, y: previewY },
-        },
-      })
-      .subscribe({
-        next: (response) => {
-          this.diagram.update((diagram) =>
-            diagram
-              ? {
-                  ...diagram,
-                  version: response.newVersion,
-                  canonicalModel: response.canonicalModel,
-                  viewState: response.viewState,
-                }
-              : diagram,
-          );
-          this.moving.set(false);
-          this.dragState.set(null);
-        },
-        error: (error: unknown) => {
-          this.moving.set(false);
-          this.dragState.set(null);
-          this.error.set(this.operationError(error, 'No se pudo mover la clase.'));
-          console.error(
-            'No se pudo mover la clase.',
-            error instanceof HttpErrorResponse ? error.status : 'Error HTTP',
-          );
-        },
-      });
+  }
+
+  private clearRemoteClassPositionPreview(classId: string): void {
+    this.remoteClassPositionPreviews.update((positions) => {
+      const next = { ...positions };
+      delete next[classId];
+      return next;
+    });
+  }
+
+  private applyClassPositionToViewState(classId: string, x: number, y: number): void {
+    this.diagram.update((diagram) => {
+      if (!diagram) return diagram;
+      const nodes = [...(diagram.viewState.nodes ?? [])];
+      const index = nodes.findIndex((node) => node.classId === classId);
+      if (index >= 0) {
+        nodes[index] = { ...nodes[index], x, y };
+      } else {
+        nodes.push({ classId, x, y, width: 235, height: 160 });
+      }
+      return { ...diagram, viewState: { ...diagram.viewState, nodes } };
+    });
   }
 
   private previewX(classId: string, fallback: number): number {
     const state = this.dragState();
-    return state?.classId === classId && state.isDragging ? state.previewX : fallback;
+    if (state?.classId === classId && state.isDragging) return state.previewX;
+    return this.remoteClassPositionPreviews()[classId]?.x ?? fallback;
   }
   private previewY(classId: string, fallback: number): number {
     const state = this.dragState();
-    return state?.classId === classId && state.isDragging ? state.previewY : fallback;
+    if (state?.classId === classId && state.isDragging) return state.previewY;
+    return this.remoteClassPositionPreviews()[classId]?.y ?? fallback;
   }
   private previewWidth(classId: string, fallback: number): number {
     const state = this.resizeState();
@@ -2669,6 +2832,7 @@ export class EditorPageComponent implements OnDestroy {
 
   startAddAttribute(): void {
     if (this.isReadOnly()) return;
+    this.inlineAddingAttributeClassId.set(null);
     if (!this.selectedClass()) return;
     this.editingAttributeId.set(null);
     this.attributeError.set('');
@@ -2689,9 +2853,11 @@ export class EditorPageComponent implements OnDestroy {
     this.selectedClassId.set(umlClass.id);
     this.selectedRelationId.set(null);
     this.startAddAttribute();
+    this.inlineAddingAttributeClassId.set(umlClass.id);
   }
 
   startEditAttribute(attribute: UmlAttribute): void {
+    this.inlineAddingAttributeClassId.set(null);
     if (this.isReadOnly()) return;
     this.editingAttributeId.set(attribute.id);
     this.attributeError.set('');
@@ -2728,6 +2894,18 @@ export class EditorPageComponent implements OnDestroy {
   }
 
   updateAttributeDraft(field: keyof AttributeDraft, value: string | boolean): void {
+    const currentClass = this.selectedClass()?.umlClass;
+    if (field === 'primaryKey' && value === true && currentClass) {
+      const editingId = this.editingAttributeId();
+      const anotherPrimaryKey = currentClass.attributes.some(
+        (attribute) => attribute.id !== editingId && attribute.primaryKey,
+      );
+      if (anotherPrimaryKey) {
+        this.attributeError.set('Esta clase ya tiene una clave primaria. Desmárcala antes de elegir otra.');
+        return;
+      }
+    }
+    this.attributeError.set('');
     this.attributeDraft.update((draft) =>
       draft ? ({ ...draft, [field]: value } as AttributeDraft) : draft,
     );
@@ -2737,6 +2915,7 @@ export class EditorPageComponent implements OnDestroy {
     if (!this.attributeSaving()) {
       this.attributeDraft.set(null);
       this.editingAttributeId.set(null);
+      this.inlineAddingAttributeClassId.set(null);
       this.attributeError.set('');
       this.advancedAttributeOptionsOpen.set(false);
     }
@@ -2753,6 +2932,10 @@ export class EditorPageComponent implements OnDestroy {
     const type = draft.type.trim();
     if (!name || !type) {
       this.attributeError.set('Nombre y tipo son obligatorios.');
+      return;
+    }
+    if (draft.primaryKey && currentClass.attributes.some(attribute => attribute.id !== this.editingAttributeId() && attribute.primaryKey)) {
+      this.attributeError.set('Esta clase ya tiene una clave primaria. Desmárcala antes de elegir otra.');
       return;
     }
     if (!this.visibilityOptions.includes(draft.visibility)) {
@@ -2887,6 +3070,7 @@ export class EditorPageComponent implements OnDestroy {
 
   startAddMethod(): void {
     if (this.isReadOnly()) return;
+    this.inlineAddingMethodClassId.set(null);
     if (!this.selectedClass()) return;
     this.editingMethodId.set(null);
     this.parameterDraft.set(null);
@@ -2896,8 +3080,16 @@ export class EditorPageComponent implements OnDestroy {
     this.methodDraft.set({ name: '', returnType: 'void', visibility: 'PUBLIC', isStatic: false });
   }
 
+  quickAddMethod(umlClass: UmlClass, event: MouseEvent): void {
+    event.stopPropagation();
+    this.selectedClassId.set(umlClass.id);
+    this.selectedRelationId.set(null);
+    this.startAddMethod();
+    this.inlineAddingMethodClassId.set(umlClass.id);
+  }
   startEditMethod(method: UmlMethod): void {
     if (this.isReadOnly()) return;
+    this.inlineAddingMethodClassId.set(null);
     this.editingMethodId.set(method.id);
     this.parameterDraft.set(null);
     this.editingParameterId.set(null);
@@ -2937,6 +3129,7 @@ export class EditorPageComponent implements OnDestroy {
 
   cancelMethodEdit(): void {
     if (this.methodSaving()) return;
+    this.inlineAddingMethodClassId.set(null);
     this.methodDraft.set(null);
     this.editingMethodId.set(null);
     this.parameterDraft.set(null);
@@ -3022,6 +3215,7 @@ export class EditorPageComponent implements OnDestroy {
         next: (response) => {
           this.applyOperationResponse(response);
           this.methodSaving.set(false);
+          if (!editingId) this.inlineAddingMethodClassId.set(null);
           this.editingMethodId.set(methodId);
           this.parameterDraft.set(null);
           this.editingParameterId.set(null);
@@ -3332,10 +3526,13 @@ export class EditorPageComponent implements OnDestroy {
       return;
     }
     const duplicate = currentDiagram.canonicalModel.classes.some(
-      (umlClass) => umlClass.id !== classId && normalizeClassName(umlClass.name) === normalizeClassName(name),
+      (umlClass) => umlClass.id !== classId && (
+        normalizeClassName(umlClass.name) === normalizeClassName(name)
+        || normalizeGeneratedClassName(umlClass.name) === normalizeGeneratedClassName(name)
+      ),
     );
     if (duplicate) {
-      this.renameError.set('Ya existe una clase con ese nombre.');
+      this.renameError.set('Ya existe una clase con ese nombre o con el mismo nombre Java generado.');
       return;
     }
     const currentClass = currentDiagram.canonicalModel.classes.find(
@@ -3391,9 +3588,25 @@ export class EditorPageComponent implements OnDestroy {
   }
 
   private operationError(error: unknown, fallback: string): string {
-    return error instanceof HttpErrorResponse && error.status === 409
-      ? 'El diagrama cambió en otra sesión. Recarga para obtener la versión más reciente.'
+    if (!(error instanceof HttpErrorResponse)) {
+      const failure = error as { reason?: string; message?: string; errorMessage?: string } | null;
+      if (failure?.reason === 'VERSION_CONFLICT') return 'El diagrama cambió en otra sesión; se sincronizó la versión más reciente. Vuelve a intentarlo.';
+      if (failure?.reason === 'FORBIDDEN') return 'Tu rol no permite modificar este diagrama.';
+      const message = failure?.errorMessage ?? failure?.message;
+      return typeof message === 'string' && message.trim() ? message.trim() : fallback;
+    }
+    if (error.status === 409) {
+      return 'El diagrama cambió en otra sesión. Recarga para obtener la versión más reciente.';
+    }
+    const responseMessage = error.error?.message ?? error.error?.detail ?? error.error?.error;
+    return typeof responseMessage === 'string' && responseMessage.trim()
+      ? responseMessage.trim()
       : fallback;
+  }
+
+  private isVersionConflict(error: unknown): boolean {
+    if (error instanceof HttpErrorResponse) return error.status === 409;
+    return (error as { reason?: string } | null)?.reason === 'VERSION_CONFLICT';
   }
 
   private renderRelation(
@@ -3500,6 +3713,13 @@ export class EditorPageComponent implements OnDestroy {
     let index = 1;
     while (names.has(normalizeClassName(`ClaseAsociacion${index}`))) index++;
     return `ClaseAsociacion${index}`;
+  }
+
+  private nextIntermediateClassName(diagram: DiagramDetail): string {
+    const names = new Set(diagram.canonicalModel.classes.map((umlClass) => normalizeClassName(umlClass.name)));
+    let index = 1;
+    while (names.has(normalizeClassName(`ClaseIntermedia${index}`))) index++;
+    return `ClaseIntermedia${index}`;
   }
 
   isAbstract(umlClass: UmlClass): boolean {

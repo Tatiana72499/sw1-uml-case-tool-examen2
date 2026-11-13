@@ -75,16 +75,24 @@ class PersistentDiagramOperationServiceTest {
     }
 
     @Test
-    void movePersistsOnlyVisualChangeAndIncrementsVersion() {
-        service.execute("diagram-1", operation("op-1", 0, DiagramOperationType.MOVE_CLASS,
-                MoveClassPayload.builder().classId("class-1").x(50).y(60).build()));
+    void movePersistsOnlyVisualChangeWithoutChangingSemanticVersion() {
+        service.saveClassPosition("diagram-1", "class-1", 50, 60, "user-1");
 
-        assertEquals(1, entity.getVersion());
-        assertEquals(1, serializer.deserializeCanonical(entity.getCanonicalModelJson()).getVersion());
+        assertEquals(0, entity.getVersion());
+        assertEquals(0, serializer.deserializeCanonical(entity.getCanonicalModelJson()).getVersion());
         assertEquals("Customer", serializer.deserializeCanonical(entity.getCanonicalModelJson())
                 .getClasses().get(0).getName());
         assertEquals(50, serializer.deserializeViewState(entity.getViewStateJson()).getNodes().get(0).getX());
         assertEquals(60, serializer.deserializeViewState(entity.getViewStateJson()).getNodes().get(0).getY());
+    }
+
+    @Test
+    void rejectsCanvasMoveFromVersionedOperationEndpoint() {
+        assertThrows(OperationApplicationException.class, () -> service.execute("diagram-1",
+                operation("op-move", 0, DiagramOperationType.MOVE_CLASS,
+                        MoveClassPayload.builder().classId("class-1").x(50).y(60).build())));
+        assertEquals(0, entity.getVersion());
+        verify(repository, never()).save(any(DiagramEntity.class));
     }
 
     @Test

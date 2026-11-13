@@ -52,6 +52,21 @@ class ImageUmlCanonicalMapperTest {
     }
 
     @Test
+    void preservesImageRelativeClassPositionsWhenTheVisionModelReturnsThem() {
+        var left = new AiUmlDetectionResponse.ClassDetection("a", "Clase1", false, List.of(), List.of(),
+                new AiUmlDetectionResponse.PositionDetection(50d, 80d));
+        var right = new AiUmlDetectionResponse.ClassDetection("b", "Clase2", false, List.of(), List.of(),
+                new AiUmlDetectionResponse.PositionDetection(700d, 300d));
+
+        var result = mapper.map(detection(List.of(left, right), List.of()), "d", "D");
+
+        assertEquals(190, result.getViewState().getNodes().getFirst().getX());
+        assertEquals(204, result.getViewState().getNodes().getFirst().getY());
+        assertEquals(1360, result.getViewState().getNodes().get(1).getX());
+        assertEquals(490, result.getViewState().getNodes().get(1).getY());
+    }
+
+    @Test
     void mapsAssociationClassLinkToCanonicalStructure() {
         var base = detection(List.of(clazz("a", "Alumno"), clazz("m", "Materia"), clazz("i", "Inscripcion")),
                 List.of(relation("enrollment", "ASSOCIATION", "a", "m", "*", "*")));

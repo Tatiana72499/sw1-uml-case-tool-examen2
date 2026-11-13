@@ -208,6 +208,17 @@ public class CanonicalModelValidator {
                 );
             }
         }
+
+        long primaryKeyCount = umlClass.getAttributes().stream()
+                .filter(attribute -> attribute != null && attribute.isPrimaryKey())
+                .count();
+        if (primaryKeyCount > 1) {
+            result.addError(
+                    "MULTIPLE_PRIMARY_KEYS",
+                    "Una clase solo puede tener un atributo marcado como clave primaria",
+                    umlClass.getId()
+            );
+        }
     }
 
     private void validateMethods(
@@ -429,6 +440,15 @@ public class CanonicalModelValidator {
                     "TARGET",
                     result
             );
+
+            if (relation.getType() == com.sw1.umltool.features.diagram.model.canonical.enums.RelationType.COMPOSITION
+                    && isMany(relation.getSourceMultiplicity()) && isMany(relation.getTargetMultiplicity())) {
+                result.addError(
+                        "COMPOSITION_CANNOT_BE_MANY_TO_MANY",
+                        "Una composición no puede tener multiplicidad de muchos a muchos; usa una asociación para modelar esa cardinalidad",
+                        relation.getId()
+                );
+            }
         }
     }
 
@@ -533,6 +553,10 @@ public class CanonicalModelValidator {
                 result.addError("DUPLICATE_ASSOCIATION_CLASS_CLASS", "Una clase no puede representar múltiples vínculos de asociación", link.getClassId());
             }
         }
+    }
+
+    private boolean isMany(Multiplicity multiplicity) {
+        return multiplicity != null && "*".equals(multiplicity.getUpper());
     }
 
     private boolean isValidLowerMultiplicity(String value) {
